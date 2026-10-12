@@ -30,6 +30,7 @@ description: 将京东爆品链接或关键词分段的商品清单批量采集�
 7. 独立验收（逐行价格/顺序/目录/图片/视频）：
    `python -X utf8 scripts/verify_batch.py --root=<root>`
 - 需要自动等待-探测-续采时：`python -X utf8 scripts/supervisor.py --root=<root>`（403/429按递增冷却，验证/登录/未知结果立即停）。
+- 点击驱动被限流后自动恢复：`python -X utf8 scripts/click_supervisor.py --root=<root>`（小时级单页探测，验证/登录问题停下等人工，最多5次）。
 
 ## 输出结构
 

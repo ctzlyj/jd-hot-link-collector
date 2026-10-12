@@ -10,12 +10,13 @@ const {root}=parseOptions(process.argv.slice(2));
 if(!fs.existsSync(root))throw Error('ROOT_NOT_FOUND');
 const stage=path.join(root,'.collector_state');
 const {session,idleTimeout,wcli}=taskContext(stage);
-const CLICK_INTERVAL_MS=30000;const INTER_PRODUCT_MS=60000;const RESPONSE_TIMEOUT_MS=20000;const LOAD_TIMEOUT_MS=30000;
+const CLICK_INTERVAL_MS=30000;const INTER_PRODUCT_MS=60000;const RESPONSE_TIMEOUT_MS=30000;const LOAD_TIMEOUT_MS=60000;
 function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.pending';fs.writeFileSync(tmp,JSON.stringify(value,null,2),'utf8');fs.renameSync(tmp,file)}
 function json(file){return JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,''))}
 const decode=v=>typeof v==='string'?JSON.parse(v):v;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const state={state:'STARTING',startedAt:new Date().toISOString(),products:0,collections:0,clicks:0,tabs:0,unavailable:0,reason:null,currentProduct:null};
+state.pid=process.pid;
 const stateFile=path.join(stage,'runner_state.json');
 function checkpoint(){state.updatedAt=new Date().toISOString();atomic(stateFile,state)}
 function halt(reason){if(state.state==='HALTED')return;state.state='HALTED';state.reason=reason;checkpoint();console.log(JSON.stringify({state:state.state,reason,products:state.products,collections:state.collections,clicks:state.clicks}));process.exitCode=2;throw new Error('HALTED')}
@@ -57,6 +58,7 @@ async function guardPage(page){
  return st;
 }
 try{
+ let lockHeld=false;const lock=path.join(stage,'click_runner.lock');const fd=fs.openSync(lock,'wx');fs.writeFileSync(fd,String(process.pid));lockHeld=true;globalThis.__lockHeld=lockHeld;
  const tasks=json(path.join(stage,'keyword_tasks.json'));
  const queue=[...new Set(Object.values(tasks).flat().map(x=>String(x.pid)))];
  state.state='RUNNING';state.queueLength=queue.length;checkpoint();
@@ -105,4 +107,5 @@ try{
  }
  state.state='DATA_COLLECTION_SWEEP_DONE';checkpoint();
  console.log(JSON.stringify({state:state.state,products:state.products,collections:state.collections,clicks:state.clicks}));
-}catch(e){if(e.message!=='HALTED')halt('LOCAL_OR_TRANSPORT_ERROR')}
+ }catch(e){if(e.message!=='HALTED'&&e.code!=='EEXIST')halt('LOCAL_OR_TRANSPORT_ERROR');else if(e.code==='EEXIST'){console.log(JSON.stringify({state:'REFUSED',reason:'ANOTHER_CLICK_RUNNER_ACTIVE'}));process.exitCode=3}}
+ finally{if(globalThis.__lockHeld){try{fs.unlinkSync(path.join(stage,'click_runner.lock'))}catch{}}}
