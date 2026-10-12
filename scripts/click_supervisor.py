@@ -27,8 +27,8 @@ def main():
  save()
  while True:
   time.sleep(max(0,state['notBefore']-time.time()))
- save(state='PROBING')
- run(['node',str(DIR/'click_probe.mjs'),'--root='+str(root)],'click_supervisor_probe.log')
+  save(state='PROBING')
+  run(['node',str(DIR/'click_probe.mjs'),'--root='+str(root)],'click_supervisor_probe.log')
   probe=read(stage/'click_probe_status.json')
   save(lastProbe=probe)
   if probe['ok']:
