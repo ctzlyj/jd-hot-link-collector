@@ -4,8 +4,16 @@ const sku='10000000000001';
 const native='https://api.m.jd.com/?appid=pc-item-soa&clientVersion=1.0.0&client=pc&functionId=pc_detailpage_wareBusiness&body='+encodeURIComponent(JSON.stringify({skuId:sku,area:'1_2_3_0',num:'1'}))+'&t=1&h5st=normal&uuid=inmemory';
 const raw={isLogin:true,pageConfigVO:{skuid:sku},skuHeadVO:{skuTitle:'商品'},bestPromotion:{purchasePrice:'8'},price:{p:'10'},wareInfoReadMap:{realSpuId:'123'},mainImageVO:{carouselArea:[{imageUrl:'jfs/x.jpg'}]}};
 function context(fetchImpl,host='item.jd.com'){
- const c={location:{hostname:host},performance:{getEntriesByType:()=>[{name:native}]},Date,URL,AbortController,encodeURI,encodeURIComponent,JSON,Promise,
-  PSign:{sign:async x=>({...x,h5st:'SDK签名+测试'})},SHA256:()=> 'mocksha',getJsToken:fn=>fn({jsToken:'memory-token'}),fetch:fetchImpl};c.window=c;return vm.createContext(c);
+ class MockXHR{
+  constructor(){this.headers={}}
+  open(method,url){this.method=method;this.url=url}
+  setRequestHeader(k,v){this.headers[k]=v}
+  getResponseHeader(k){return this.response?.headers.get(k)||null}
+  send(){Promise.resolve(fetchImpl(this.url,{credentials:this.withCredentials?'include':'omit',headers:this.headers})).then(async r=>{this.response=r;this.status=r.status;this.responseText=await r.text();this.onload()}).catch(()=>this.onerror())}
+  abort(){this.onabort?.()}
+ }
+ const c={location:{hostname:host,href:'https://'+host+'/'+sku+'.html'},performance:{getEntriesByType:()=>[{name:native}]},Date,URL,AbortController,encodeURI,encodeURIComponent,JSON,Promise,XMLHttpRequest:MockXHR,
+  PSign:{sign:async x=>({...x,h5st:'SDK签名+测试'})},SHA256:()=> 'mocksha',getJsToken:fn=>fn({jsToken:'memory-token'})};c.window=c;return vm.createContext(c);
 }
 const settle=()=>new Promise(r=>setImmediate(r));
 test('existing signed page path creates one request then returns sanitized price',async()=>{

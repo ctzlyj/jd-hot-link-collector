@@ -22,5 +22,6 @@ def write_workbook(spec):
     check = load_workbook(out, read_only=True, data_only=False)
     observed = [list(x) for x in check.active.values]
     check.close()
-    if observed != [headers] + rows: raise ValueError('WORKBOOK_READBACK_MISMATCH')
+    expected = [[None if value == '' else value for value in row] for row in [headers] + rows]
+    if observed != expected: raise ValueError('WORKBOOK_READBACK_MISMATCH')
     return out

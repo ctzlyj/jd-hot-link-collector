@@ -1,6 +1,6 @@
 """Public material helpers and collector root resolution; never queries prices or login."""
 from __future__ import annotations
-import os,sys
+import os,sys,re,hashlib,io
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -10,11 +10,14 @@ from collector_guard import atomic_json, ordered_variants
 def resolve_root():
     for arg in sys.argv[1:]:
         if arg.startswith('--root='): return Path(arg.split('=',1)[1]).expanduser().resolve()
+    if '--root' in sys.argv:
+        at=sys.argv.index('--root')
+        if len(sys.argv)>at+1:return Path(sys.argv[at+1]).expanduser().resolve()
     env=os.environ.get('JD_COLLECTOR_ROOT')
     if env: return Path(env).expanduser().resolve()
     raise SystemExit('ROOT_REQUIRED: pass --root=<output-dir> or JD_COLLECTOR_ROOT')
 ROOT = resolve_root()
-STAGE = ROOT / '.collector_state'
+STAGE = Path(os.environ['JD_COLLECTOR_STATE_DIR']).resolve() if os.environ.get('JD_COLLECTOR_STATE_DIR') else ROOT / '.collector_state'
 CACHE = STAGE / 'asset_cache'
 
 def safe_name(text):

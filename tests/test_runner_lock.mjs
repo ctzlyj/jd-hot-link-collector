@@ -1,0 +1,3 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {acquireRunnerLock} from '../scripts/runner_lock.mjs';
+test('interface and click runners share lock; failed contender cannot release it',()=>{const d=fs.mkdtempSync(path.join(os.tmpdir(),'collector-lock-'));const release=acquireRunnerLock(d);assert.throws(()=>acquireRunnerLock(d),/ANOTHER_RUNNER/);assert.equal(fs.readFileSync(path.join(d,'runner.lock'),'utf8'),String(process.pid));release();release();assert.equal(fs.existsSync(path.join(d,'runner.lock')),false)});

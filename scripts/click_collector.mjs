@@ -1,14 +1,17 @@
 /** Click-driven collector: fresh tab per product, real spec clicks, native responses only.
  * Programmatic SDK requests may be silently tarpitted; this path uses the page's own traffic. */
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';import {spawnSync} from 'node:child_process';
-import {project,validate} from './request_policy.mjs';
+import {project,validate,classifyResponse} from './request_policy.mjs';
 import {clickSpecExpression} from './browser_worker.mjs';
 import {taskContext} from './task_context.mjs';
 import {parseOptions} from './collection_policy.mjs';
+import {variantRows} from './variant_bridge.mjs';
+import {acquireRunnerLock} from './runner_lock.mjs';
+import {waitNativePage,completedRequestState} from './native_page.mjs';
 const dir=path.dirname(fileURLToPath(import.meta.url));
-const {root}=parseOptions(process.argv.slice(2));
+const {root,stateDir}=parseOptions(process.argv.slice(2));
 if(!fs.existsSync(root))throw Error('ROOT_NOT_FOUND');
-const stage=path.join(root,'.collector_state');
+const stage=stateDir?path.resolve(stateDir):path.join(root,'.collector_state');
 const {session,idleTimeout,wcli}=taskContext(stage);
 const CLICK_INTERVAL_MS=30000;const INTER_PRODUCT_MS=60000;const RESPONSE_TIMEOUT_MS=30000;const LOAD_TIMEOUT_MS=60000;
 function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.pending';fs.writeFileSync(tmp,JSON.stringify(value,null,2),'utf8');fs.renameSync(tmp,file)}
@@ -23,11 +26,13 @@ function halt(reason){if(state.state==='HALTED')return;state.state='HALTED';stat
 process.argv[1]=wcli.main;
 await import(pathToFileURL(wcli.preload).href);
 const {Page}=await import(pathToFileURL(wcli.page).href);
+const {sendCommandFull}=await import(pathToFileURL(path.join(path.dirname(wcli.page),'daemon-client.js')).href);
+const releaseLock=acquireRunnerLock(stage);
 const bus=new Page(session,idleTimeout,undefined,'background');
 const pageOf=tab=>{const p=new Page(session,idleTimeout,undefined,'background');p.setActivePage(tab);return p};
 async function pageState(page){return decode(await page.evaluate(`JSON.stringify({host:location.hostname,isTaskItem:location.hostname==='item.jd.com',isFrequencyPage:location.hostname==='pc-frequent-pro.pf.jd.com',isChallenge:location.hostname==='cfe.m.jd.com'||/risk_handler/.test(location.pathname),specs:document.querySelectorAll('.specification-item-sku').length})`))}
 function saveSku(raw){
- const d=project(raw);
+ const d=raw.responseSku?raw:project(raw);
  try{validate(d.responseSku,d);atomic(path.join(stage,'data',d.responseSku+'.json'),{source:'live_native_page',collectedAt:new Date().toISOString(),data:d});state.collections++;return {saved:true,sku:d.responseSku,arrival:d.pp}}
  catch(e){
   if(e.message==='ARRIVAL_PRICE_MISSING'&&d.login===true&&d.responseSku&&d.title&&d.realSpuId&&(d.carousel||[]).some(x=>x.u)){
@@ -38,15 +43,14 @@ function saveSku(raw){
  }
 }
 function variantsOf(cacheFile){
- const check=spawnSync('python',['-X','utf8',path.join(dir,'variant_queue.py'),cacheFile],{encoding:'utf8'});
- if(check.status!==0)return null;return JSON.parse(check.stdout)
+ return variantRows(path.join(dir,'variant_queue.py'),cacheFile);
 }
 /** Read new capture rows, save every business response, halt on platform refusal. */
 async function drainBusiness(page,matched,expectSku){
  const rows=await page.readNetworkCapture();
  for(const r of rows){
   let raw=null;try{raw=JSON.parse(r.responseBody||r.responsePreview||'')}catch{}
-  if(raw?.skuHeadVO){const res=saveSku(raw);if(!matched&&(!expectSku||res.sku===expectSku))matched=res}
+  if(raw?.skuHeadVO){const verdict=classifyResponse(r.responseStatus,'',raw);if(!verdict.ok)halt(verdict.reason);if(expectSku&&String(raw.pageConfigVO?.skuid)!==expectSku)continue;const res=saveSku(raw);if(!matched)matched=res}
   else if(r.responseStatus===403)halt('HTTP_403_REFUSED');
  }
  return matched;
@@ -58,7 +62,6 @@ async function guardPage(page){
  return st;
 }
 try{
- let lockHeld=false;const lock=path.join(stage,'click_runner.lock');const fd=fs.openSync(lock,'wx');fs.writeFileSync(fd,String(process.pid));lockHeld=true;globalThis.__lockHeld=lockHeld;
  const tasks=json(path.join(stage,'keyword_tasks.json'));
  const queue=[...new Set(Object.values(tasks).flat().map(x=>String(x.pid)))];
  state.state='RUNNING';state.queueLength=queue.length;checkpoint();
@@ -72,18 +75,20 @@ try{
   let needed=[];
   if(known){
    const variants=variantsOf(known)||[];
-   needed=variants.filter(sku=>{const p=path.join(stage,'data',sku+'.json');if(!fs.existsSync(p))return true;try{const saved=json(p);validate(sku,saved.data);return !['live_signed_page','live_native_page'].includes(saved.source)}catch{return true}});
+   needed=variants.filter(row=>{const p=path.join(stage,'data',row.sku+'.json');if(!fs.existsSync(p))return true;try{const saved=json(p);validate(row.sku,saved.data);return !['live_signed_page','live_native_page'].includes(saved.source)}catch{return true}});
    if(!needed.length)continue;
   }
   state.currentProduct=pid;state.products++;checkpoint();
   await sleep(INTER_PRODUCT_MS); // Rapid consecutive product loads previously triggered the verification page.
-  const tab=await bus.newTab(`https://item.jd.com/${pid}.html`);state.tabs++;checkpoint();
+  const tab=await bus.newTab();state.tabs++;checkpoint();
   const page=pageOf(tab);
   try{
    await page.startNetworkCapture('pc_detailpage_wareBusiness');
-   let initial=null;const deadline=Date.now()+LOAD_TIMEOUT_MS;
-   while(Date.now()<deadline&&!initial){await sleep(2500);await guardPage(page);initial=await drainBusiness(page,null,null)}
-   if(!initial){halt('INITIAL_RESPONSE_MISSING');throw new Error('HALTED')}
+   // Start capture before navigation. Avoid goto's unrelated page-global injection.
+   await sendCommandFull('navigate',{url:`https://item.jd.com/${pid}.html`,session,page:tab,idleTimeout,windowMode:'background',surface:'browser'});
+   const initialResponse=await waitNativePage(page,pid,{timeoutMs:LOAD_TIMEOUT_MS});
+   if(!initialResponse.ok)halt(initialResponse.reason);
+   const initial=saveSku(initialResponse.data);
    console.log(JSON.stringify({product:pid,initial}));
    const variantsFile=fs.existsSync(mainCache)?mainCache:partialCache;
    const variants=variantsOf(variantsFile)||[];
@@ -95,17 +100,18 @@ try{
    }
    for(const row of pending){
     await sleep(CLICK_INTERVAL_MS);await guardPage(page);
+    const baseline=decode(await page.evaluate(completedRequestState(row.sku))).completed;
     const clicked=decode(await page.evaluate(clickSpecExpression(row.spec1,row.spec2)));
     if(!clicked.ok){atomic(path.join(stage,'errors',row.sku+'.json'),{sku:row.sku,reason:clicked.reason,state:'SPEC_CLICK_FAILED'});continue}
     state.clicks++;checkpoint();
-    let got=null;const dl=Date.now()+RESPONSE_TIMEOUT_MS;
-    while(Date.now()<dl&&!got){await sleep(2500);got=await drainBusiness(page,null,row.sku)}
-    if(got)console.log(JSON.stringify({product:pid,target:row.sku,result:got}));
-    else atomic(path.join(stage,'errors',row.sku+'.json'),{sku:row.sku,reason:'CLICK_RESPONSE_MISSING',state:'CLICK_NO_RESPONSE'});
+    const captured=await waitNativePage(page,row.sku,{timeoutMs:RESPONSE_TIMEOUT_MS,afterCount:baseline});
+    if(captured.ok){const got=saveSku(captured.data);console.log(JSON.stringify({product:pid,target:row.sku,result:got}))}
+    else if(['HTTP_403_REFUSED','HTTP_429_RATE_LIMIT','PAGE_FREQUENCY_LIMIT','VERIFICATION_REQUIRED','LOGIN_REQUIRED'].includes(captured.reason))halt(captured.reason);
+    else atomic(path.join(stage,'errors',row.sku+'.json'),{sku:row.sku,reason:captured.reason,state:'CLICK_NO_RESPONSE'});
    }
   }finally{try{await page.closeTab(tab)}catch{state.tabCloseFailed=(state.tabCloseFailed||0)+1}checkpoint()}
  }
  state.state='DATA_COLLECTION_SWEEP_DONE';checkpoint();
  console.log(JSON.stringify({state:state.state,products:state.products,collections:state.collections,clicks:state.clicks}));
- }catch(e){if(e.message!=='HALTED'&&e.code!=='EEXIST')halt('LOCAL_OR_TRANSPORT_ERROR');else if(e.code==='EEXIST'){console.log(JSON.stringify({state:'REFUSED',reason:'ANOTHER_CLICK_RUNNER_ACTIVE'}));process.exitCode=3}}
- finally{if(globalThis.__lockHeld){try{fs.unlinkSync(path.join(stage,'click_runner.lock'))}catch{}}}
+ }catch(e){if(e.message!=='HALTED'){state.state='HALTED';state.reason=e.message==='SKU_MATRIX_INVALID'?e.message:'LOCAL_OR_TRANSPORT_ERROR';checkpoint();process.exitCode=2}}
+ finally{releaseLock()}

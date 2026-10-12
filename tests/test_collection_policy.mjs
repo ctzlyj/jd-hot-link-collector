@@ -15,3 +15,4 @@ test('supplement phase retries old missing price only once per extraction versio
 });
 test('resolved partial files do not keep batch pending',()=>assert.equal(unresolvedPrices([{data:{responseSku:'123'}}],new Set(['123'])).length,0));
 test('spacing spans recovery probe and separate collector runs',()=>assert.equal(waitUntilNext(11000,10000,30000),29000));
+test('documented space-separated root and paths containing equals are accepted',()=>{assert.equal(parseOptions(['--root','D:/path=folder','--run']).root,'D:/path=folder');assert.equal(parseOptions(['--root=D:/path=folder']).root,'D:/path=folder')});

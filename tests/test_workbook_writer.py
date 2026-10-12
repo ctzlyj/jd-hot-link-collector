@@ -18,4 +18,12 @@ class WorkbookTests(unittest.TestCase):
     def test_save_error_raises(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(Exception):write_workbook({'headers':['A'],'rows':[[1]],'output':str(Path(d)/'missing-dir'/'x.xlsx')})
+    def test_real_product_matrix_with_blank_specs_roundtrips(self):
+        from package_contract import HEADERS,table_matrix
+        main={'title':'title','attrs':[],'crumbs':[]}
+        rows=table_matrix(main,[{'sku':'10000000000001','spec1':'A','spec2':''}],{'10000000000001':{'pp':'8.25'}})
+        with tempfile.TemporaryDirectory() as d:
+            out=Path(d)/'product.xlsx'
+            write_workbook({'headers':HEADERS,'rows':rows,'output':str(out)})
+            wb=load_workbook(out);self.assertEqual(wb.active['H2'].value,8.25);self.assertIsNone(wb.active['G2'].value);wb.close()
 if __name__=='__main__':unittest.main()

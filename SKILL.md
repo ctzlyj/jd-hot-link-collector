@@ -1,80 +1,49 @@
 ---
 name: jd-hot-link-collector
-description: 将京东爆品链接或关键词分段的商品清单批量采集为可审核素材包：逐SKU真实到手价（前台finalPrice优先，禁止原价补齐）、前台SKU顺序、主图/详情图/SKU图、主图视频单独文件夹、22列商品信息表、断点续采和严格的频控熔断。用户给京东链接清单并要求“采集/搬运素材/整理素材包但不上架”时使用；不用于发布上架、营销报名或绕过平台风控。
+description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
 ---
 
-# 京东爆品链接批量采集
+# 京东链接素材采集
 
-把“采集素材 + 真实到手价 + 断点恢复 + 独立验收”作为一个可恢复事务。只采集，不上架、不改图。
+只采集，不上架、不改图。先读 `references/browser-session-setup.md`；涉及浏览器先读本机 `browser-task-router` 并复用当前授权连接。用户只需提供清单/链接和输出目录，由助手配置本机依赖、任务会话与流程，不要求用户手写程序。
 
-## 输入约定
+## 输入与输出
 
-- 清单为 `.xlsx`：第1列为关键词行（仅A列有词），其后是表头行；商品行：C列=商品ID，M列=商品链接，B列=标题。
-- 商品ID集合必须与链接集合一致；链接列允许整体错位（脚本会识别并按ID集合校验）；重复行保留行号记录、按唯一商品去重。
-- 仅处理用户明确授权的链接和素材。
+- 关键词分段 `.xlsx`：仅 A 列有词的行作为关键词；商品行 B=标题、C=商品 ID、M=链接。按关键词核对 ID/链接集合，链接列错位留审计，重复来源保留行号但只采一个包。
+- 单链接或普通链接列表可由助手转换成相同 `keyword_tasks.json` 格式；禁止猜商品 ID 或扩大输入范围。
+- `<root>/<关键词>/<商品标题>/` 包含 `主图/`、`详情图/`、`SKU图/`、`主图视频/`、`商品信息.xlsx`。无视频时保留空视频目录。未知字段空白，真实 JPEG，视频原件单独存放。
+- 状态放 `<root>/.collector_state/`，不会自动读取或复制另一台机器的账号、Cookie、设备信息。
 
-## 流程
+## 执行
 
-1. 生成清单与审计（无网络请求）：
-   `python -X utf8 scripts/prepare_batch.py --input <清单.xlsx> --root <输出根目录>`
-2. 在已登录浏览器中建立一个任务专属商品页（不绑定工作页），把 `{session, tab, idleTimeout, windowMode:"background", probeSku}` 写入 `<root>/.collector_state/browser_context.json`；详见 `references/browser-session-setup.md`。
-3. **采集路由（默认）**：接口模式优先，风控后降级点击模式。
-   a. 先跑接口模式（单在途、30秒间隔、每轮≤20请求，失败自动熔断且不丢缓存）：
-      `node scripts/collect_signed.mjs --run --root=<root> --interval-ms=30000 --max-requests=20`
-   b. 若首轮能连续取到多个SKU价格，说明会话额度健康，继续接口模式直至完成或熔断。
-   c. 一旦出现以下任一情况，判定该会话被风控，**立即切换点击模式**，不再重试接口：
-      - 程序化请求静默挂起（第2个起请求不返回；详见 references/rate-limit-and-recovery.md）
-      - HTTP 403/429 或 PC频控页
-      - 恢复探测/首轮只成功1个请求后失败（账号被标记的典型表现）
-   点击模式（新标签页逐商品、真实规格点击、原生响应捕获）：
-   `node scripts/click_collector.mjs --root=<root>`
-   已知限制：goto重载后的页面点击失效；商品间导航间隔不足会触发验证页（脚本内置60秒）。
-4. 长冷却后恢复采集时，第一个业务动作必须是真实规格点击测试（禁止先发脚本请求）：
-   `node scripts/clean_session_click_test.mjs --root=<root>`
-5. 备用路径：程序化SDK请求采集（仅在单次探测验证通过后使用；30秒间隔、每轮≤20请求，成功缓存不重采）：
-   `node scripts/collect_signed.mjs --run --root=<root> --interval-ms=30000 --max-requests=20`
-6. 生成完整商品包（缺任一SKU到手价即不打包）：
-   `python -X utf8 scripts/package_live.py --root=<root>`
-7. 独立验收（逐行价格/顺序/目录/图片/视频）：
-   `python -X utf8 scripts/verify_batch.py --root=<root>`
-- 需要自动等待-探测-续采时：`python -X utf8 scripts/supervisor.py --root=<root>`（403/429按递增冷却，验证/登录/未知结果立即停）。
-- 点击驱动被限流后自动恢复：`python -X utf8 scripts/click_supervisor.py --root=<root>`（小时级单页探测，验证/登录问题停下等人工，最多5次）。
+1. `python -X utf8 scripts/prepare_batch.py --input <xlsx> --root <目录>`：无网络解析并保存源哈希、行号、关键词与去重范围。
+2. 配置任务会话及本机 WebCLI 模块路径到 `.collector_state/browser_context.json`。接口采集自己创建商品任务页，旧 tab 不是跨机器身份凭据。
+3. **接口优先**：`node scripts/collect_signed.mjs --run --root=<目录> --interval-ms=30000 --max-requests=8`
+   每源商品加载一次原生上下文；同商品 SKU 用页面官方 SDK + XHR，不逐 SKU 翻页。不跨商品复用旧设备上下文，签名和设备头仅在浏览器内存。
+4. `COOLDOWN_REQUIRED`：保存断点，等待后重新运行；有效原生/接口价格缓存均复用。若是缺价，普通取数阶段继续采其他商品，补价阶段加 `--recheck-prices` 有界核验，缺价永不补原价。
+5. 接口失败先读 `references/rate-limit-and-recovery.md` 分流，检查真实失败原因。仅正常页面仍可访问、接口无法覆盖时才使用 `node scripts/click_collector.mjs --root=<目录>`。403/429/频控/验证后先停，不能自动切工具绕过。
+6. `python -X utf8 scripts/package_live.py --root=<目录>`：全部 SKU 有到手价才生成完整包；`python -X utf8 scripts/verify_batch.py --root=<目录>`：逐行与源缓存独立验收。
 
-## 输出结构
+`--root path` 与 `--root=path` 均支持。旧批次状态可显式用 `--state-dir=<旧状态目录>`；素材脚本对应设置任务级 `JD_COLLECTOR_STATE_DIR`。迁移不覆盖已有商品包、示例、源表格或价格证据。
 
-`<root>/<关键词>/<商品标题>/` 内：`主图/`、`详情图/`、`SKU图/`、`主图视频/`（仅存在视频时）、`商品信息.xlsx`。同级标题冲突时追加SKU后缀。
+## 到手价和顺序
 
-## 价格与顺序契约
+- 优先未划线的 `warePriceGatherVO.priceItemList` 的 `priceType=finalPrice`；无该项才用 `bestPromotion.purchasePrice`。不以 `price.p`、普通 `jdPrice`、历史价或券额推算补缺。
+- 响应必须已登录，且请求 SKU 与返回 SKU 完全一致。HTTP 200 但无优惠价记 `ARRIVAL_PRICE_PENDING`；不是接口失败或商品下架。
+- 前台维度与按钮 `no` 排序；双维度取真实 SKU 交集，禁止笛卡尔积。商品级字段只在排序后首行；见 `references/price-and-sku-contract.md`。
 
-- 到手价优先取 `warePriceGatherVO.priceItemList` 中未划线的 `priceType="finalPrice"`；无该项才回退 `bestPromotion.purchasePrice`；普通 `jdPrice`、原价、清单历史价一律不得补齐。
-- SKU行顺序按 `colorSizeVO.colorSizeList` 各维度按钮 `no` 升序，双维度取真实SKU交集，禁止笛卡尔积或采集器默认顺序。
-- 商品级字段（标题、货号、属性、类目）只保留在排序后的首行。
+## 保护与验收
 
-## 停止条件
+- 接口/点击共用独占锁。只控制任务页，保留工作浏览器。未知响应先中止、读回，不自动重放。
+- 403/429/PC 频控页/验证/登录失效停本轮；正常人工验证后重新核实状态。没有固定冷却必恢复或内网必放行保证。
+- 30 秒请求、60 秒商品页是本地保护初值，不是平台安全承诺。优先减少重复调用，不能为速度牺牲真实到手价和完整 SKU。
+- 完整清单须每项状态明确。`DATA_COMPLETE` 仅表示采集数据齐，最终完成必须所有素材包独立 `VERIFIED`；失败/缺价不算成功。
+- 本机曾验收 2 商品/35 SKU、81 JPEG/1 MP4；不是154条全批或同事电脑的验收。
 
-- 出现 `pc-frequent-pro.pf.jd.com` PC频控页、403、429（尊重 `Retry-After`）、验证页或登录失效：立即熔断，本轮停止，不换账号/IP/端点绕过。
-- 403会污染当前会话：触发后真实点击和文档导航都可能被重定向到频控页。下次恢复必须长冷却后先做真实规格点击测试。
-- 请求结果未知时不重放；缺价商品保留 `partial_data` 与 `ARRIVAL_PRICE_PENDING` 状态，不算完成。
-- 30秒/20请求只是本地保护值，不是平台安全阈值，更不是已验证的“解除限流”方案。
+## 测试
 
-### 路由判据速查
+`node --test tests/*.mjs`
 
-| 现象 | 判定 | 动作 |
-|---|---|---|
-| 接口首轮连续取到多个SKU价格 | 会话健康 | 继续接口模式 |
-| 接口第2个请求起挂起不返回 | 账号被标记 | 切点击模式，禁再试接口 |
-| 403/429/PC频控页 | 平台拒绝 | 切点击模式；仍被拒则长冷却 |
-| 点击模式也403/验证页 | 全局限流 | 停止，click_supervisor 小时级探测 |
+`python -X utf8 -m unittest discover -s tests -p test_*.py -v`
 
-## 断点
-
-全部状态在 `<root>/.collector_state/`：`data/`（有效价格快照）、`partial_data/`（缺价主数据）、`errors/`、`request_clock.json`（跨进程请求间隔）、`receipts/`、`independent_validation.json`。重跑只补缺失项。
-
-## 验证
-
-```
-node --test tests/test_browser_worker.mjs tests/test_request_policy.mjs tests/test_collection_policy.mjs tests/test_task_context.mjs
-python -X utf8 -m unittest discover -s tests -p "test_*.py" -v
-```
-
-参考：`references/browser-session-setup.md`、`references/rate-limit-and-recovery.md`、`references/price-and-sku-contract.md`、`references/package-contract.md`
+测试包含实际 CLI 离线跑两商品、页面头/同源上下文、SKU对象契约、捕获时序、JPEG编码、工作簿回读和共享锁。常用脚本不得用 import 作为语法测试，使用 `node --check` / Python编译；顶层CLI import可能真正启动采集。

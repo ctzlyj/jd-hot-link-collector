@@ -23,13 +23,15 @@ def positive_price(value):
 
 def signed_response_projection(raw):
     car = (raw.get('mainImageVO') or {}).get('carouselArea') or []
+    final = next((x for x in (raw.get('warePriceGatherVO') or {}).get('priceItemList',[]) if x.get('priceType')=='finalPrice' and not x.get('hitLine')),None)
     return {
         'ok': True,
         'login': raw.get('isLogin') is True,
         'responseSku': str((raw.get('pageConfigVO') or {}).get('skuid') or ''),
         'title': (raw.get('skuHeadVO') or {}).get('skuTitle') or '',
         'p': (raw.get('price') or {}).get('p'),
-        'pp': (raw.get('bestPromotion') or {}).get('purchasePrice'),
+        'pp': final.get('price') if final is not None else (raw.get('bestPromotion') or {}).get('purchasePrice'),
+        'priceSource': 'warePriceGatherVO.finalPrice' if final is not None else 'bestPromotion.purchasePrice',
         'realSpuId': str((raw.get('wareInfoReadMap') or {}).get('realSpuId') or ''),
         'crumbs': [{'text': x.get('text', '')} for x in (raw.get('crumbInfoVO') or {}).get('crumbs', [])],
         'attrs': [{'labelName': x.get('labelName', ''), 'labelValue': x.get('labelValue', '')} for x in (raw.get('productAttributeVO') or {}).get('attributes', [])],
