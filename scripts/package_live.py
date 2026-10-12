@@ -16,7 +16,7 @@ def live_data(sku):
     if not p.exists():return None
     try:
         d=load(p)
-        if d.get('source')!='live_signed_page':return None
+        if d.get('source') not in ('live_signed_page','live_native_page'):return None
         return validate_main(sku,d['data'])
     except (KeyError,ValueError,RuntimeError):return None
 

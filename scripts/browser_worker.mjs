@@ -26,12 +26,18 @@ export function startExpression(sku){
    const outcome=classify(response.status,text,raw,response.headers.get('retry-after'));
    if(!outcome.ok){window.__jdCollectorJob={phase:'DONE',sku,sent:true,...outcome,evidence:{responseSku:String(raw?.pageConfigVO?.skuid||''),hasTitle:!!raw?.skuHeadVO?.skuTitle,hasArrival:!!raw?.bestPromotion?.purchasePrice,isLogin:raw?.isLogin===true,httpStatus:response.status,isOver:raw?.pageConfigVO?.isOver,itemOverTip:raw?.itemOverVO?.itemOverTip,redirectKey:raw?.urlRedirectVO?.key,redirectDestination:raw?.urlRedirectVO?.url?(()=>{try{const u=new URL(raw.urlRedirectVO.url,location.href);return {host:u.hostname,path:u.pathname}}catch{return null}})():null,noSale:raw?.pageConfigVO?.noSale,noSaleReason:raw?.pageConfigVO?.noSaleReason,rawKeys:raw?Object.keys(raw):[],stock:raw?.stockInfo?.stockState,urlRedirect:raw?.urlRedirectVO?Object.keys(raw.urlRedirectVO):[],code:raw?.code}};return}
    const projected=project(raw);window.__jdCollectorLastData=projected;window.__jdCollectorPriceEvidence={priceKeys:Object.keys(raw.price||{}),promotionKeys:Object.keys(raw.bestPromotion||{}),hasLogin:raw.isLogin===true,stock:raw.stockInfo?.stockState};const data=validate(sku,projected);window.__jdCollectorJob={phase:'DONE',sku,sent:true,ok:true,data};
-  }catch(e){const allowed=/^(ARRIVAL_PRICE_MISSING|SKU_ID_MISSING|SKU_ID_MISMATCH|TITLE_MISSING|DETAIL_ID_MISSING|MAIN_IMAGES_MISSING|NORMAL_SIGNATURE_MISSING|ADDRESS_CONTEXT_MISSING|PAGE_CONTEXT_MISSING)$/;window.__jdCollectorJob={phase:'DONE',sku,ok:false,reason:allowed.test(e.message)?e.message:'REQUEST_RESULT_UNKNOWN',...(e.message==='ARRIVAL_PRICE_MISSING'?{partialData:window.__jdCollectorLastData}:{} )}}})();
+  }catch(e){const allowed=/^(ARRIVAL_PRICE_MISSING|SKU_ID_MISSING|SKU_ID_MISMATCH|TITLE_MISSING|DETAIL_ID_MISSING|MAIN_IMAGES_MISSING|NORMAL_SIGNATURE_MISSING|ADDRESS_CONTEXT_MISSING|PAGE_CONTEXT_MISSING)$/;const redact=x=>String(x).replace(/https?:[^ ]+/g,'[url]').slice(0,160);window.__jdCollectorJob={phase:'DONE',sku,ok:false,reason:allowed.test(e.message)?e.message:'REQUEST_RESULT_UNKNOWN',...(e.message==='ARRIVAL_PRICE_MISSING'?{partialData:window.__jdCollectorLastData}:{} ),errorEvidence:{name:redact(e&&e.name||'Error'),message:redact(e&&e.message||'')}}}})();
   return JSON.stringify({ok:true,phase:'STARTED',sku});
  })()`;
 }
 export const readExpression=`JSON.stringify(window.__jdCollectorJob?{...window.__jdCollectorJob}:null)`;
 export const abortExpression=`(()=>{window.__jdCollectorAbort?.abort();return JSON.stringify({abortRequested:!!window.__jdCollectorAbort})})()`;
+/** Real in-page spec click; spec2 empty means single-dimension product. */
+export function clickSpecExpression(spec1,spec2){
+ if(typeof spec1!=='string'||!spec1.trim())throw Error('INVALID_SPEC');
+ if(spec2!==undefined&&typeof spec2!=='string')throw Error('INVALID_SPEC');
+ return `(()=>{const find=t=>Array.from(document.querySelectorAll('.specification-item-sku')).find(e=>(e.innerText||'').trim()===t);const a=find(${JSON.stringify(spec1)});if(!a)return JSON.stringify({ok:false,reason:'SPEC_BUTTON_MISSING'});a.click();const second=${JSON.stringify(spec2||'')};if(second){const b=find(second);if(!b)return JSON.stringify({ok:false,reason:'SPEC_BUTTON_MISSING'});b.click();}return JSON.stringify({ok:true})})()`;
+}
 
 
 

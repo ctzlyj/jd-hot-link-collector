@@ -18,13 +18,16 @@ description: 将京东爆品链接或关键词分段的商品清单批量采集�
 1. 生成清单与审计（无网络请求）：
    `python -X utf8 scripts/prepare_batch.py --input <清单.xlsx> --root <输出根目录>`
 2. 在已登录浏览器中建立一个任务专属商品页（不绑定工作页），把 `{session, tab, idleTimeout, windowMode:"background", probeSku}` 写入 `<root>/.collector_state/browser_context.json`；详见 `references/browser-session-setup.md`。
-3. 长冷却后恢复采集时，第一个业务动作必须是真实规格点击测试（禁止先发脚本请求）：
+3. 采集主路径为点击驱动（新标签页逐商品、真实规格点击、原生响应捕获）：
+   `node scripts/click_collector.mjs --root=<root>`
+   已知限制：goto重载后的页面点击失效；同页第2个起程序化请求会被静默挂起；商品间导航间隔不足会触发验证页（脚本内置60秒）。
+4. 长冷却后恢复采集时，第一个业务动作必须是真实规格点击测试（禁止先发脚本请求）：
    `node scripts/clean_session_click_test.mjs --root=<root>`
-4. 采集逐SKU到手价与商品数据（30秒间隔、每轮≤20请求，成功缓存不重采）：
+5. 备用路径：程序化SDK请求采集（仅在单次探测验证通过后使用；30秒间隔、每轮≤20请求，成功缓存不重采）：
    `node scripts/collect_signed.mjs --run --root=<root> --interval-ms=30000 --max-requests=20`
-5. 生成完整商品包（缺任一SKU到手价即不打包）：
+6. 生成完整商品包（缺任一SKU到手价即不打包）：
    `python -X utf8 scripts/package_live.py --root=<root>`
-6. 独立验收（逐行价格/顺序/目录/图片/视频）：
+7. 独立验收（逐行价格/顺序/目录/图片/视频）：
    `python -X utf8 scripts/verify_batch.py --root=<root>`
 - 需要自动等待-探测-续采时：`python -X utf8 scripts/supervisor.py --root=<root>`（403/429按递增冷却，验证/登录/未知结果立即停）。
 
