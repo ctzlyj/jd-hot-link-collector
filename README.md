@@ -17,8 +17,10 @@ $skill = "$env:USERPROFILE\.joycode\skills\jd-hot-link-collector"
 python -X utf8 "$skill\scripts\prepare_batch.py" --input 清单.xlsx --root D:\collection
 # 2. 在已登录浏览器建任务页并写 browser_context.json（见 references/browser-session-setup.md）
 # 3. 长冷却后先做真实点击测试，再采集
-node "$skill\scripts\clean_session_click_test.mjs" --root D:\collection
+# 3. 默认路由：接口模式优先，被风控后自动降级点击模式
 node "$skill\scripts\collect_signed.mjs" --run --root D:\collection --interval-ms=30000 --max-requests=20
+# 接口模式静默挂起/403后，切点击模式：
+node "$skill\scripts\click_collector.mjs" --root D:\collection
 # 4. 打包与验收
 python -X utf8 "$skill\scripts\package_live.py" --root D:\collection
 python -X utf8 "$skill\scripts\verify_batch.py" --root D:\collection
