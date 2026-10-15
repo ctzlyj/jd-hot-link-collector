@@ -2,7 +2,7 @@
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validate} from './request_policy.mjs';
 import {startExpression,readExpression,pageStateExpression,abortExpression} from './browser_worker.mjs';
-import {parseOptions,shouldRequest,unresolvedPrices,waitUntilNext,PRICE_RECHECK_VERSION} from './collection_policy.mjs';
+import {parseOptions,shouldRequest,unresolvedPrices,waitUntilNext,partialRecheckEvidence} from './collection_policy.mjs';
 import {taskContext} from './task_context.mjs';
 import {acquireRunnerLock} from './runner_lock.mjs';
 import {variantRows} from './variant_bridge.mjs';
@@ -32,7 +32,8 @@ function save(sku,data,source){
  try{validate(sku,data)}catch(e){
   if(e.message!=='ARRIVAL_PRICE_MISSING')halt(e.message);
   if(!data?.login||!data?.title||!data?.realSpuId||!data.carousel?.some(x=>x.u))halt('INVALID_PARTIAL_DATA');
-  atomic(path.join(stage,'partial_data',sku+'.json'),{source:source+'_arrival_pending',collectedAt:new Date().toISOString(),priceRecheckVersion:PRICE_RECHECK_VERSION,data});
+  const timestamp=new Date().toISOString();
+  atomic(path.join(stage,'partial_data',sku+'.json'),{source:source+'_arrival_pending',collectedAt:timestamp,...partialRecheckEvidence(options.recheckPrices,partialCache(sku),timestamp),data});
   atomic(path.join(stage,'errors',sku+'.json'),{sku,reason:'ARRIVAL_PRICE_MISSING',state:'PRICE_PENDING'});state.partial++;
   return 'ARRIVAL_PRICE_PENDING';
  }
@@ -57,10 +58,11 @@ try{
    let unavailable=false;try{unavailable=json(path.join(stage,'errors',pid+'.json')).reason==='PRODUCT_UNAVAILABLE'}catch{}
    if(unavailable){state.unavailable++;continue}
    const known=validCache(pid)||partialCache(pid)?.data;
+   if(known&&options.mainOnly)continue;
    if(known){const needed=cacheRows(pid).filter(r=>shouldRequest({validCache:!!validCache(r.sku),partialCache:partialCache(r.sku),recheckPrices:options.recheckPrices}));if(!needed.length)continue}
    if(state.requests>=options.maxRequests||(options.maxProducts&&state.products>=options.maxProducts)){checkpoint({state:'COOLDOWN_REQUIRED'});break}
    // The document also calls the business interface. Share its throttle with SKU requests.
-   await sleep(waitUntilNext(Date.now(),clock(),Math.max(60000,options.interval)));
+   await sleep(waitUntilNext(Date.now(),clock(),Math.max(Number(process.env.JD_COLLECTOR_NAV_MIN_MS||'60000'),options.interval)));
    state.products++;state.navigations++;checkpoint({currentProduct:pid,currentSku:pid});
    const opened=await openNativePage(owner,Page,sendCommandFull,context,pid);current=opened;
    state.requests++;finishRequest();
@@ -72,6 +74,7 @@ try{
    const rows=cacheRows(pid);
    await opened.page.evaluate(`window.__jdNativeRequestContext.allowedSkuIds=${JSON.stringify(rows.map(r=>r.sku))};undefined`);
    console.log(JSON.stringify({product:pid,sku:pid,state:initialState,arrivalPrice:opened.result.data.pp,skuCount:rows.length,requests:state.requests}));checkpoint();
+   if(options.mainOnly){await opened.page.closeTab(opened.tab);current=null;continue;}
    for(const row of rows){
     const sku=row.sku;if(sku===pid)continue;
     if(!shouldRequest({validCache:!!validCache(sku),partialCache:partialCache(sku),recheckPrices:options.recheckPrices}))continue;
@@ -94,7 +97,7 @@ try{
   if(state.state==='RUNNING'){
    const partialDir=path.join(stage,'partial_data');const partials=fs.existsSync(partialDir)?fs.readdirSync(partialDir).filter(x=>x.endsWith('.json')).map(x=>json(path.join(partialDir,x))):[];
    const resolved=new Set(partials.filter(x=>validCache(x.data?.responseSku)).map(x=>x.data.responseSku));
-   const remaining=unresolvedPrices(partials,resolved);checkpoint({state:remaining.length?'DATA_COLLECTED_PRICE_PENDING':'DATA_COMPLETE',pendingPriceSkus:remaining.map(x=>x.data.responseSku)});
+   const remaining=unresolvedPrices(partials,resolved);checkpoint({state:options.mainOnly?'MAIN_SCAN_COMPLETE':remaining.length?'DATA_COLLECTED_PRICE_PENDING':'DATA_COMPLETE',pendingPriceSkus:remaining.map(x=>x.data.responseSku)});
   }
  }
 }catch(e){if(e.message==='ANOTHER_RUNNER_OR_UNRESOLVED_LOCK'){state.state='REFUSED';state.reason=e.message}else if(!e.taskStop){checkpoint({state:'HALTED',reason:e.message==='SKU_MATRIX_INVALID'?e.message:'LOCAL_OR_TRANSPORT_ERROR',errorType:e.name})}process.exitCode=2;}

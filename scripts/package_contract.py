@@ -1,5 +1,12 @@
 """Exact sample-column contract, front-end SKU order, no original-price fallback."""
 import re,json,html
+def decode_detail_payload(content):
+    """Decode JD description bytes without silently replacing text."""
+    try:
+        return content.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return content.decode('gb18030')
+
 HEADERS=['*标题','货号','商品属性','类目','品牌','规格1','规格2','*价格','库存','短标题','商家SKU','SKU商品条形码','SKU属性','无理由退货','支付方式限制','产地','发货地','商品条形码','商品毛重(公斤)','[包装]长(mm)','[包装]宽(mm)','[包装]高(mm)']
 def ordered_detail_urls(payload):
     m=re.match(r'\s*showdesc\((.*)\)\s*$',payload,re.S)

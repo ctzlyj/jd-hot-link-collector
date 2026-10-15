@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import requests
 from PIL import Image
 from collector_guard import atomic_json, ordered_variants
+from jpeg_cache import save_cached_jpeg
 
 def resolve_root():
     for arg in sys.argv[1:]:
@@ -45,21 +46,4 @@ def final_state(initial, detail_count, missing_count, price_complete):
     return 'ASSETS_READY_PRICE_PENDING' if not price_complete else 'ASSETS_READY'
 
 def save_jpeg(url, destination):
-    key = hashlib.sha256(url.encode()).hexdigest()
-    cache = CACHE / (key + '.jpg')
-    if not cache.exists():
-        content = get_public(url)
-        with Image.open(io.BytesIO(content)) as image:
-            image.load()
-            if image.mode == 'RGBA':
-                rgb = Image.new('RGB', image.size, 'white')
-                rgb.paste(image, mask=image.getchannel('A'))
-                image = rgb
-            else: image = image.convert('RGB')
-            image.save(cache, 'JPEG', quality=92)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if not destination.exists(): destination.write_bytes(cache.read_bytes())
-    with Image.open(destination) as im:
-        im.verify()
-        if im.format != 'JPEG': raise ValueError('JPEG validation failed')
-    return str(destination.relative_to(STAGE))
+    return save_cached_jpeg(url, destination, CACHE, STAGE, get_public)

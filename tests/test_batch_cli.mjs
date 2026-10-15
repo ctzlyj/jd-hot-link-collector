@@ -26,3 +26,25 @@ test('real batch CLI loads context once per product and calls SKU interfaces wit
 test('real CLI resumes native response cache without redownloading finished products',()=>{
  const f=fixture();assert.equal(run(f).status,0);const r=run(f);assert.equal(r.status,0,r.stderr);const s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.requests,0);assert.equal(s.products,0);assert.equal(s.state,'DATA_COMPLETE');
 });
+test('main-only covers all source products before consuming sibling SKU requests',()=>{
+ const f=fixture(),r=run(f,['--main-only']);assert.equal(r.status,0,r.stderr);const state=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));
+ assert.equal(state.state,'MAIN_SCAN_COMPLETE');assert.equal(state.products,2);assert.equal(state.requests,2);assert.equal(state.successful,2);
+ const trace=JSON.parse(fs.readFileSync(path.join(f.runtime,'trace.json'),'utf8'));assert.equal(trace.filter(x=>x.request).length,0);
+ assert.equal(run(f,['--main-only']).status,0);const again=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(again.requests,0);
+});
+test('full sweep following main scan still fetches all genuine SKU prices',()=>{
+ const f=fixture();assert.equal(run(f,['--main-only']).status,0);const r=run(f);assert.equal(r.status,0,r.stderr);
+ const state=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(state.state,'DATA_COMPLETE');assert.equal(state.successful,2);
+ for(const id of ['10000000000002','20000000000002'])assert.ok(fs.existsSync(path.join(f.stage,'data',id+'.json')));
+});
+test('missing prices get one real supplementary pass, never ordinary-price fallback',()=>{
+ const f=fixture();const file=path.join(f.runtime,'fixture.json');const data=JSON.parse(fs.readFileSync(file,'utf8'));
+ for(const raw of Object.values(data)){delete raw.bestPromotion;raw.warePriceGatherVO={priceItemList:[{priceType:'jdPrice',price:'9.25'}]};}
+ fs.writeFileSync(file,JSON.stringify(data));
+ let r=run(f);assert.equal(r.status,0,r.stderr);let s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.state,'DATA_COLLECTED_PRICE_PENDING');assert.equal(s.requests,4);
+ let saved=JSON.parse(fs.readFileSync(path.join(f.stage,'partial_data',f.first+'.json'),'utf8'));assert.equal(saved.priceRecheckedAt,undefined);assert.equal(fs.existsSync(path.join(f.stage,'data',f.first+'.json')),false);
+ assert.equal(run(f).status,0);s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.requests,0);
+ r=run(f,['--recheck-prices']);assert.equal(r.status,0,r.stderr);s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.requests,4);
+ saved=JSON.parse(fs.readFileSync(path.join(f.stage,'partial_data',f.first+'.json'),'utf8'));assert.ok(saved.priceRecheckedAt);
+ assert.equal(run(f,['--recheck-prices']).status,0);s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.requests,0);
+});

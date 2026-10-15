@@ -6,14 +6,39 @@ from datetime import datetime,timezone
 from collector_guard import atomic_json,validate_main,ordered_variants
 from asset_paths import ROOT,STAGE,CACHE,safe_name,image_url,save_jpeg,get_public
 from workbook_writer import write_workbook
-from package_contract import ordered_detail_urls,HEADERS,table_matrix,error_state
+from package_contract import ordered_detail_urls,decode_detail_payload,HEADERS,table_matrix,error_state
 from media_guard import inspect_mp4
 SCRIPT=Path(__file__).parent
 
 def load(path):return json.loads(path.read_text(encoding='utf-8-sig'))
-def live_data(sku):
-    p=STAGE/'data'/f'{sku}.json'
+
+def fallback_marker(stage=STAGE):
+    """Batch-scoped user authorization for original-price fallback, or None."""
+    p=Path(stage)/'price_fallback.json'
     if not p.exists():return None
+    try:return (load(p) or {}).get('marker')
+    except (ValueError,AttributeError):return None
+
+def authorize_original_price_fallback(stage=STAGE):
+    marker='original_price_user_authorized_'+datetime.now().strftime('%Y%m%d')
+    atomic_json(Path(stage)/'price_fallback.json',{'marker':marker,'authorizedAt':datetime.now(timezone.utc).isoformat()})
+    return marker
+
+def live_data(sku,stage=None,marker=None):
+    stage=STAGE if stage is None else Path(stage)
+    marker=fallback_marker(stage) if marker is None else marker
+    p=stage/'data'/f'{sku}.json'
+    if not p.exists():
+        # Without an explicit per-batch authorization marker, pending prices stay pending.
+        if not marker:return None
+        fp=stage/'partial_data'/f'{sku}.json'
+        if not fp.exists():return None
+        try:
+            d=load(fp)
+            if d.get('source') not in ('live_signed_page_arrival_pending','live_native_page_arrival_pending'):return None
+            data=dict(d['data']);data['pp']=data.get('p');data['priceSource']=marker
+            return validate_main(sku,data)
+        except (KeyError,ValueError,RuntimeError):return None
     try:
         d=load(p)
         if d.get('source') not in ('live_signed_page','live_native_page'):return None
@@ -23,7 +48,7 @@ def live_data(sku):
 def details(spu):
     p=STAGE/'details_ordered'/f'{spu}.json'
     if p.exists():return load(p)
-    data=ordered_detail_urls(get_public(f'https://d.3.cn/desc/{spu}').decode('utf-8'))
+    data=ordered_detail_urls(decode_detail_payload(get_public(f'https://d.3.cn/desc/{spu}')))
     if not data:raise ValueError('DETAIL_IMAGES_EMPTY')
     atomic_json(p,data);return data
 
@@ -110,6 +135,11 @@ def finalize(p):
     atomic_json(STAGE/'receipts'/f"{p['pid']}.json",receipt);return receipt
 
 def main():
+    import argparse
+    ap=argparse.ArgumentParser(add_help=False)
+    ap.add_argument('--allow-original-price-fallback',action='store_true')
+    args,_=ap.parse_known_args()
+    if args.allow_original_price_fallback:authorize_original_price_fallback()
     CACHE.mkdir(parents=True,exist_ok=True)
     tasks=load(STAGE/'keyword_tasks.json');report=[];prepared=[];names={}
     for kw,items in tasks.items():

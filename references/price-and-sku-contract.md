@@ -5,6 +5,7 @@
 - 优先：`warePriceGatherVO.priceItemList` 中 `priceType="finalPrice"` 且 `hitLine` 非真的 `price`（当前前台真实展示价）。
 - 回退：`bestPromotion.purchasePrice`（旧响应无上述字段时）。
 - 禁止：普通 `jdPrice`、`price.p` 原价、清单历史到手价、券面额推算。缺价即 `ARRIVAL_PRICE_PENDING`，不打包、不补齐。
+- 唯一例外是用户对本批明确授权的原价兜底：`package_live.py --allow-original-price-fallback` 记录 `price_fallback.json` 后，缺促销价 SKU 才用 `price.p` 原价，`priceSources` 逐 SKU 标记 `original_price_user_authorized_日期`；验收与上架清单按该标记复核，授权随批次状态目录保存，不跨批生效。
 - 响应必须 `isLogin===true` 且 `pageConfigVO.skuid` 与请求SKU完全一致，否则按无效处理。
 
 ## SKU顺序与矩阵
