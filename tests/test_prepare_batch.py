@@ -65,5 +65,36 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(layout,'standard');self.assertEqual(duplicates,[])
         self.assertEqual(len(tasks['kw']),1)
 
+
+    def test_listing_layout_url_title_pid(self):
+        rows=[['磨砂玻璃贴膜']+[None]*12,
+              ['主图','标题','商品ID','类型',None,None,None,None,None,None,None,None,None],
+              ['https://img14.360buyimg.com/n1/jfs/x.jpg','防窥膜','10215516291374','官方暂无数据',None,None,None,None,None,None,None,None,None],
+              ['主图','标题','商品ID',None,None,None,None,None,None,None,None,None,None],
+              ['https://img14.360buyimg.com/n1/jfs/y.jpg','磨砂贴','10137594710934',None,None,None,None,None,None,None,None,None,None],
+              ['身高尺墙贴']+[None]*12,
+              ['https://img14.360buyimg.com/n1/jfs/z.jpg','身高尺','10099331401834',None,None,None,None,None,None,None,None,None,None]]
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['磨砂玻璃贴膜','身高尺墙贴'])
+        self.assertEqual([x['pid'] for x in tasks['磨砂玻璃贴膜']],['10215516291374','10137594710934'])
+        self.assertEqual(tasks['磨砂玻璃贴膜'][0]['title'],'防窥膜')
+        self.assertEqual(shifted,[])
+    def test_listing_layout_header_row_is_not_keyword(self):
+        rows=[['主图','标题','商品ID',None,None,None,None,None,None,None,None,None,None],
+              ['https://img14.360buyimg.com/n1/jfs/x.jpg','t','10215516291374',None,None,None,None,None,None,None,None,None,None]]
+        with self.assertRaises(ValueError):parse_rows(rows)
+    def test_standard_without_links_parses_as_listing(self):
+        rows=[['kw']+[None]*12,
+              ['https://img14.360buyimg.com/n1/jfs/x.jpg','t','100000000001',None,None,None,None,None,None,None,None,None,None]]
+        self.assertEqual(detect_layout(rows),'listing')
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['kw'])
+        self.assertEqual(tasks['kw'][0]['pid'],'100000000001')
+
+    def test_keyword_surrounding_spaces_are_stripped(self):
+        rows=[[' 吸盘式毛巾架 ']+[None]*12,product('100000001','https://item.jd.com/100000001.html')]
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['吸盘式毛巾架'])
+
 if __name__=='__main__':unittest.main()
 

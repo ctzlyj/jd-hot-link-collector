@@ -9,17 +9,47 @@ def _pad(row):
     return values[:13]
 
 def detect_layout(rows):
-    """Pick the standard B/C/M layout or the A-keyword/D-pid listing layout by evidence only."""
-    c_pids = d_pids = links = 0
+    """Pick standard B/C/M, A-keyword/D-pid, or A-url/B-title/C-pid listing layouts by evidence only."""
+    c_pids = d_pids = links = link_column_used = 0
     for row in rows:
         values = _pad(row)
         if re.fullmatch(r'\d{8,}', str(values[2] or '')): c_pids += 1
         if re.fullmatch(r'\d{8,}', str(values[3] or '')): d_pids += 1
         if re.findall(r'item\.jd\.com/(\d+)\.html', str(values[12] or '')): links += 1
-    return 'alternate' if c_pids == 0 and d_pids > 0 and links == 0 else 'standard'
+        if str(values[12] or '').strip(): link_column_used += 1
+    if c_pids and links: return 'standard'
+    # Link-less layouts are only trusted when the link column is entirely unused;
+    # junk in it still reaches the standard ID/link agreement audit.
+    if c_pids and not link_column_used: return 'listing'
+    if d_pids and not link_column_used: return 'alternate'
+    return 'standard'
 
 def parse_rows(rows):
-    return (parse_rows_standard if detect_layout(rows) == 'standard' else parse_rows_alternate)(rows)
+    layout = detect_layout(rows)
+    parser = {'standard': parse_rows_standard, 'alternate': parse_rows_alternate, 'listing': parse_rows_listing}[layout]
+    return parser(rows)
+
+def parse_rows_listing(rows):
+    """A=main-image url, B=title, C=product id; keyword rows carry only column A."""
+    keyword = None
+    sections = {}
+    for n, row in enumerate(rows, 1):
+        values = _pad(row)
+        pid = str(values[2] or '').strip()
+        if re.fullmatch(r'\d{8,}', pid):
+            if keyword is None: raise ValueError('PRODUCT_BEFORE_KEYWORD_SECTION:' + str(n))
+            sec = sections.setdefault(keyword, {'products': {}})
+            item = sec['products'].setdefault(pid, {'pid': pid, 'rows': [], 'title': str(values[1] or '')})
+            item['rows'].append(n)
+            continue
+        a_text = str(values[0]).strip() if values[0] is not None else ''
+        rest = [v for v in values[1:] if v not in (None, '')]
+        if a_text and not rest and not re.fullmatch(r'\d{6,}', a_text) and not a_text.startswith(('http://', 'https://')):
+            keyword = a_text
+            sections.setdefault(keyword, {'products': {}})
+    tasks = {kw: [dict(item, row=item['rows'][0]) for item in sec['products'].values()]
+             for kw, sec in sections.items() if sec['products']}
+    return tasks, []
 
 def parse_rows_alternate(rows):
     """A=keyword, C=title, D=product id; header/blank rows carry no numeric D id."""
@@ -54,7 +84,7 @@ def parse_rows_standard(rows):
         pid = str(values[2] or '')
         links = re.findall(r'item\.jd\.com/(\d+)\.html', str(values[12] or ''))
         if first is not None and all(v is None for v in values[1:]) and not str(first).startswith(('http://', 'https://')):
-            keyword = str(first)
+            keyword = str(first).strip()
             sections.setdefault(keyword, {'products': {}, 'linkIds': set()})
             continue
         if not pid and not links: continue
@@ -77,7 +107,8 @@ def parse_rows_standard(rows):
 def parse_batch(rows):
     """Parse, then keep only the first occurrence of a product id across keyword sections."""
     layout = detect_layout(rows)
-    tasks, shifted = (parse_rows_standard if layout == 'standard' else parse_rows_alternate)(rows)
+    parser = {'standard': parse_rows_standard, 'alternate': parse_rows_alternate, 'listing': parse_rows_listing}[layout]
+    tasks, shifted = parser(rows)
     total_rows = sum(len(x['rows']) for items in tasks.values() for x in items)
     seen = {}
     duplicates = []
@@ -102,6 +133,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--input', required=True, help='keyword-sectioned listing .xlsx')
     ap.add_argument('--root', required=True, help='collection output root directory')
+    ap.add_argument('--state-dir', help='task-local state directory (default <root>/.collector_state)')
     a = ap.parse_args()
     source = Path(a.input).expanduser().resolve()
     root = Path(a.root).expanduser().resolve()
@@ -111,7 +143,7 @@ def main():
     try: rows = list(wb.active.values)
     finally: wb.close()
     tasks, shifted, layout, duplicates, total_rows = parse_batch(rows)
-    stage = root / '.collector_state'
+    stage = Path(a.state_dir).expanduser().resolve() if a.state_dir else root / '.collector_state'
     stage.mkdir(parents=True, exist_ok=True)
     atomic(stage / 'keyword_tasks.json', tasks)
     scope = sum(len(v) for v in tasks.values())
