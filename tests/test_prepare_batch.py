@@ -108,5 +108,17 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(tasks['洗衣袋滚筒洗衣机'][0]['pid'],'10200074155985')
         self.assertEqual(tasks['痒痒挠抓背'][0]['title'],'痒痒挠')
 
+    def test_link_only_rows_derive_products_from_official_links(self):
+        rows=[['泡脚袋']+[None]*12,
+              [None]*12+['https://item.jd.com/10236988038434.html'],
+              [None]*12+['https://item.jd.com/10124934963520.html'],
+              product('100000001','https://item.jd.com/100000001.html')]
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual([x['pid'] for x in tasks['泡脚袋']],['10236988038434','10124934963520','100000001'])
+        derived=[x for x in tasks['泡脚袋'] if x.get('linkDerived')]
+        self.assertEqual([x['pid'] for x in derived],['10236988038434','10124934963520'])
+
 if __name__=='__main__':unittest.main()
+
+
 

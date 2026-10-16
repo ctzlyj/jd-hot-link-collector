@@ -94,7 +94,12 @@ def parse_rows_standard(rows):
         sec['linkIds'].update(links)
         # Header/label rows carry neither a numeric product id nor a product link; skip them.
         if not links and not re.fullmatch(r'\d{8,}', pid): continue
-        if not pid: continue  # link-only row: link evidence only, not a product
+        if not pid:
+            # Link-only row: the official item link itself is the product identity.
+            if links:
+                item = sec['products'].setdefault(links[0], {'pid': links[0], 'rows': [], 'title': str(values[1] or ''), 'linkDerived': True})
+                item['rows'].append(n)
+            continue
         if not re.fullmatch(r'\d{8,}', pid): raise ValueError('INVALID_PRODUCT_ID:' + str(n))
         item = sec['products'].setdefault(pid, {'pid': pid, 'rows': [], 'title': str(values[1] or '')})
         item['rows'].append(n)
@@ -144,6 +149,7 @@ def main():
     try: rows = list(wb.active.values)
     finally: wb.close()
     tasks, shifted, layout, duplicates, total_rows = parse_batch(rows)
+    link_derived = sum(1 for items in tasks.values() for x in items if x.get('linkDerived'))
     stage = Path(a.state_dir).expanduser().resolve() if a.state_dir else root / '.collector_state'
     stage.mkdir(parents=True, exist_ok=True)
     atomic(stage / 'keyword_tasks.json', tasks)
@@ -151,6 +157,7 @@ def main():
     audit = {'source': str(source), 'sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
              'layout': layout, 'keywords': list(tasks), 'sourceProducts': scope, 'sourceProductRows': total_rows,
              'duplicateRows': total_rows - scope, 'crossKeywordDuplicates': duplicates,
+             'linkDerivedProducts': link_derived,
              'shiftedLinkRows': shifted, 'rowAlignmentErrors': []}
     atomic(stage / 'input_audit.json', audit)
     print(json.dumps({k: v for k, v in audit.items() if k != 'shiftedLinkRows'}, ensure_ascii=False))
