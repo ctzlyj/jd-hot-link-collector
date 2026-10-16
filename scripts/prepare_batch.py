@@ -10,18 +10,19 @@ def _pad(row):
 
 def detect_layout(rows):
     """Pick standard B/C/M, A-keyword/D-pid, or A-url/B-title/C-pid listing layouts by evidence only."""
-    c_pids = d_pids = links = link_column_used = 0
+    c_pids = d_pids = links = url_first = 0
     for row in rows:
         values = _pad(row)
         if re.fullmatch(r'\d{8,}', str(values[2] or '')): c_pids += 1
         if re.fullmatch(r'\d{8,}', str(values[3] or '')): d_pids += 1
         if re.findall(r'item\.jd\.com/(\d+)\.html', str(values[12] or '')): links += 1
-        if str(values[12] or '').strip(): link_column_used += 1
+        if str(values[0] or '').startswith(('http://', 'https://')): url_first += 1
     if c_pids and links: return 'standard'
-    # Link-less layouts are only trusted when the link column is entirely unused;
-    # junk in it still reaches the standard ID/link agreement audit.
-    if c_pids and not link_column_used: return 'listing'
-    if d_pids and not link_column_used: return 'alternate'
+    # A-url product rows mark the link-less listing layout; other C-pid files
+    # stay standard so the ID/link agreement audit still applies to them.
+    if c_pids and url_first: return 'listing'
+    # D-pid keyword-sectioned listings (shop-name or other columns may occupy M).
+    if d_pids and not c_pids: return 'alternate'
     return 'standard'
 
 def parse_rows(rows):

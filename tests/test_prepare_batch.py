@@ -96,5 +96,17 @@ class PrepareTests(unittest.TestCase):
         tasks,shifted=parse_rows(rows)
         self.assertEqual(list(tasks),['吸盘式毛巾架'])
 
+    def test_alternate_layout_with_shop_column_in_m(self):
+        rows=[['洗衣袋滚筒洗衣机','主图','标题','商品ID','类型','价格','到手价','原价','补贴金额','商品标签','评价数','总销量','店铺'],
+              ['','https://img14.360buyimg.com/n1/jfs/x.jpg','德国洗衣袋','10200074155985','官方暂无数据','269','269','269','0','包邮','200+','500+','凝彬科济诚专卖店'],
+              ['痒痒挠抓背']+[None]*12,
+              ['','主图','标题','商品ID',None,None,None,None,None,None,None,None,'店铺'],
+              ['','https://img14.360buyimg.com/n1/jfs/y.jpg','痒痒挠','10185907904647',None,None,None,None,None,None,None,None,'卡卡佳专营店']]
+        self.assertEqual(detect_layout(rows),'alternate')
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['洗衣袋滚筒洗衣机','痒痒挠抓背'])
+        self.assertEqual(tasks['洗衣袋滚筒洗衣机'][0]['pid'],'10200074155985')
+        self.assertEqual(tasks['痒痒挠抓背'][0]['title'],'痒痒挠')
+
 if __name__=='__main__':unittest.main()
 
