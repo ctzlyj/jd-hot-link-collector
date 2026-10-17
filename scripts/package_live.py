@@ -49,13 +49,21 @@ def details(spu):
     p=STAGE/'details_ordered'/f'{spu}.json'
     if p.exists():return load(p)
     data=ordered_detail_urls(decode_detail_payload(get_public(f'https://d.3.cn/desc/{spu}')))
-    if not data:raise ValueError('DETAIL_IMAGES_EMPTY')
+    # A parsed document with zero images is a genuinely image-less detail page; cache it
+    # and keep the empty 详情图 folder. Fetch failures still raise from get_public and
+    # malformed documents raise DETAIL_FORMAT_INVALID in ordered_detail_urls.
     atomic_json(p,data);return data
 
 def plan_product(keyword,item,known_names):
-    pid=item['pid'];main=live_data(pid)
+    pid=item['pid'];error=STAGE/'errors'/f'{pid}.json'
+    # An unavailable verdict wins even when partial main data was collected first
+    # (e.g. spec-matrix products whose page loads fine but cannot be modeled).
+    if error.exists():
+        saved=load(error)
+        if saved.get('reason')=='PRODUCT_UNAVAILABLE':
+            return {'pid':pid,'keyword':keyword,'state':'PRODUCT_UNAVAILABLE','reason':(saved.get('evidence') or {}).get('failureType') or saved.get('reason')}
+    main=live_data(pid)
     if not main:
-        error=STAGE/'errors'/f'{pid}.json'
         if error.exists():return {'pid':pid,'keyword':keyword,'state':error_state(load(error)),'reason':load(error).get('evidence',{}).get('itemOverTip') or load(error).get('reason')}
         return {'pid':pid,'keyword':keyword,'state':'MAIN_OR_PRICE_PENDING'}
     rows=ordered_variants(pid,main['colorSize']);prices={r['sku']:live_data(r['sku']) for r in rows}
@@ -104,6 +112,15 @@ def plan_product(keyword,item,known_names):
     atomic_json(temp/'package_metadata.json',metadata)
     return {'pid':pid,'keyword':keyword,'state':'AWAITING_WORKBOOK','spec':spec,'metadata':metadata,'temp':str(temp),'final':str(final)}
 
+def prior_folder_owner(final,pid):
+    """True only when a provided prior receipt proves the folder packages this same pid."""
+    import os
+    path=os.environ.get('JD_COLLECTOR_PRIOR_RECEIPTS')
+    if not path:return False
+    try:entries=json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    except (OSError,ValueError):return False
+    return any(isinstance(r,dict) and str(r.get('folder'))==str(final) and str(r.get('sourceSku'))==str(pid) for r in entries)
+
 def verify_table(p,metadata):
     from openpyxl import load_workbook
     w=load_workbook(p,read_only=True,data_only=False);s=w.active
@@ -125,7 +142,14 @@ def finalize(p):
             im.verify()
     for v in meta['videos']:inspect_mp4((temp/v['file']).read_bytes())
     final=Path(p['final']);final.parent.mkdir(exist_ok=True)
-    if final.exists():raise ValueError('USER_FOLDER_COLLISION')
+    if final.exists():
+        # A folder from a prior batch that packaged the same source product is our own
+        # artifact; move it aside and rebuild with this batch's current data. Anything
+        # else remains a hard stop so genuine user folders are never overwritten.
+        if not prior_folder_owner(final,p['pid']):raise ValueError('USER_FOLDER_COLLISION')
+        backup=STAGE/'replaced_prior_folders'/(p['pid']+'_'+datetime.now().strftime('%Y%m%d%H%M%S'))
+        backup.parent.mkdir(parents=True,exist_ok=True)
+        final.rename(backup)
     # Only copy complete business artifacts; metadata stays in task work area.
     final.mkdir()
     for name in ['主图','详情图','SKU图','主图视频']:shutil.copytree(temp/name,final/name)

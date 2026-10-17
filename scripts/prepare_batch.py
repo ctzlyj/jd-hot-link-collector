@@ -25,9 +25,28 @@ def detect_layout(rows):
     if d_pids and not c_pids: return 'alternate'
     return 'standard'
 
+HEADER_LABELS = {'主图', '标题', '商品ID', '类型', '价格', '到手价', '原价', '补贴金额', '商品标签', '评价数', '总销量', '店铺', '商品链接'}
+
+def keyword_cell(values, col):
+    cell = values[col]
+    text = str(cell).strip() if cell is not None else ''
+    if not text or re.fullmatch(r'\d{6,}', text) or text.startswith(('http://', 'https://')) or text in HEADER_LABELS:
+        return None
+    return text
+
+def alternate_keyword_column(rows):
+    """Keyword sections may live in column A or B; pick the one with more keyword-only rows."""
+    a_only = b_only = 0
+    for row in rows:
+        values = _pad(row)
+        if keyword_cell(values, 0) and not any(v not in (None, '') for v in values[1:]): a_only += 1
+        if keyword_cell(values, 1) and not any(v not in (None, '') for v in values[:1] + values[2:]): b_only += 1
+    return 1 if b_only > a_only else 0
+
 def parse_rows(rows):
     layout = detect_layout(rows)
-    parser = {'standard': parse_rows_standard, 'alternate': parse_rows_alternate, 'listing': parse_rows_listing}[layout]
+    if layout == 'alternate': return parse_rows_alternate(rows, alternate_keyword_column(rows))
+    parser = {'standard': parse_rows_standard, 'listing': parse_rows_listing}[layout]
     return parser(rows)
 
 def parse_rows_listing(rows):
@@ -52,14 +71,15 @@ def parse_rows_listing(rows):
              for kw, sec in sections.items() if sec['products']}
     return tasks, []
 
-def parse_rows_alternate(rows):
-    """A=keyword, C=title, D=product id; header/blank rows carry no numeric D id."""
+def parse_rows_alternate(rows, keyword_col=0):
+    """Keyword sections in column A or B; products carry C=title, D=product id.
+    Column A may hold an unrelated keyword index next to product rows; it is ignored
+    whenever the keyword column is B, and header-label cells never start sections."""
     keyword = None
     sections = {}
     shifted = []
     for n, row in enumerate(rows, 1):
         values = _pad(row)
-        first = values[0]
         pid = str(values[3] or '').strip()
         if re.fullmatch(r'\d{8,}', pid):
             if keyword is None: raise ValueError('PRODUCT_BEFORE_KEYWORD_SECTION:' + str(n))
@@ -67,9 +87,9 @@ def parse_rows_alternate(rows):
             item = sec['products'].setdefault(pid, {'pid': pid, 'rows': [], 'title': str(values[2] or '')})
             item['rows'].append(n)
             continue
-        a_text = str(first).strip() if first is not None else ''
-        if a_text and not re.fullmatch(r'\d{6,}', a_text) and not a_text.startswith(('http://', 'https://')):
-            keyword = a_text
+        kw = keyword_cell(values, keyword_col)
+        if kw:
+            keyword = kw
             sections.setdefault(keyword, {'products': {}, 'linkIds': set()})
     tasks = {kw: [dict(item, row=item['rows'][0]) for item in sec['products'].values()]
              for kw, sec in sections.items() if sec['products']}
@@ -113,8 +133,11 @@ def parse_rows_standard(rows):
 def parse_batch(rows):
     """Parse, then keep only the first occurrence of a product id across keyword sections."""
     layout = detect_layout(rows)
-    parser = {'standard': parse_rows_standard, 'alternate': parse_rows_alternate, 'listing': parse_rows_listing}[layout]
-    tasks, shifted = parser(rows)
+    if layout == 'alternate':
+        tasks, shifted = parse_rows_alternate(rows, alternate_keyword_column(rows))
+    else:
+        parser = {'standard': parse_rows_standard, 'listing': parse_rows_listing}[layout]
+        tasks, shifted = parser(rows)
     total_rows = sum(len(x['rows']) for items in tasks.values() for x in items)
     seen = {}
     duplicates = []

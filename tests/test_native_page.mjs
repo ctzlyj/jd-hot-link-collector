@@ -9,6 +9,17 @@ test('wait does not clear pending capture entries before API loading finished',a
 });
 test('OPTIONS success is not successful product evidence',()=>assert.equal(capturedBusiness([{method:'OPTIONS',responseStatus:200}],sku),null));
 test('whitelist excludes credentials and mismatched SKU is never saved',()=>{const r=capturedBusiness([response()],sku);assert.equal(r.context.headers.Cookie,undefined);assert.equal(r.context.headers['X-Skuid-Param'],'page-context');assert.equal(capturedBusiness([response('10000000000002')],sku).reason,'SKU_ID_MISMATCH')});
+test('item URL redirected to JD homepage is an unavailable product, not a transport stall',async()=>{
+ let time=0,reads=0;
+ const page={evaluate:async()=>JSON.stringify({host:'www.jd.com',path:'/',isFrequencyPage:false,isChallenge:false,apiFinished:false}),readNetworkCapture:async()=>{reads++;return []}};
+ const r=await waitNativePage(page,sku,{timeoutMs:60000,now:()=>time,sleep:async ms=>{time+=ms}});
+ assert.equal(r.ok,false);assert.equal(r.reason,'PRODUCT_UNAVAILABLE_REDIRECT');assert.equal(reads,0);assert.ok(time<10000);
+});
+test('item pages on item.jd.com never trigger the redirect shortcut',async()=>{
+ let time=0;
+ const page={evaluate:async()=>JSON.stringify({host:'item.jd.com',path:'/10000000000001.html',isFrequencyPage:false,isChallenge:false,apiFinished:true}),readNetworkCapture:async()=>[response()]};
+ const r=await waitNativePage(page,sku,{timeoutMs:5000,now:()=>time,sleep:async ms=>{time+=ms}});assert.equal(r.ok,true);
+});
 test('genuine platform refusals remain visible',async()=>{let time=0;const p={evaluate:async()=>JSON.stringify({isChallenge:true}),readNetworkCapture:()=>{throw Error('not allowed')}};const r=await waitNativePage(p,sku,{now:()=>time,sleep:async ms=>{time+=ms}});assert.equal(r.reason,'VERIFICATION_REQUIRED')});
 test('request-only capture is not classified as platform refusal',()=>assert.equal(capturedBusiness([{url:'request-only'}],sku),null));
 test('truncated business evidence fails closed',()=>assert.equal(capturedBusiness([{...response(),responseBodyTruncated:true}],sku).reason,'CAPTURE_BODY_TRUNCATED'));

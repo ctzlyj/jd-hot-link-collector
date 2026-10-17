@@ -37,6 +37,26 @@ test('full sweep following main scan still fetches all genuine SKU prices',()=>{
  const state=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(state.state,'DATA_COMPLETE');assert.equal(state.successful,2);
  for(const id of ['10000000000002','20000000000002'])assert.ok(fs.existsSync(path.join(f.stage,'data',id+'.json')));
 });
+test('deterministic spec-matrix failure is isolated to the failure list without halting the batch',()=>{
+ const f=fixture();
+ const third='30000000000001';
+ const file=path.join(f.runtime,'fixture.json');const data=JSON.parse(fs.readFileSync(file,'utf8'));
+ const raw=data[f.first];
+ data[third]={...raw,pageConfigVO:{skuid:third},skuHeadVO:{skuTitle:'matrix broken'},wareInfoReadMap:{realSpuId:third.slice(0,4)},colorSizeVO:{colorSizeList:[
+  {dim:1,buttons:[{no:1,text:'A',skuId:third.slice(0,-2)+'01',skuList:[third.slice(0,-2)+'01']}]},
+  {dim:2,buttons:[{no:1,text:'B',skuId:third.slice(0,-2)+'01',skuList:[third.slice(0,-2)+'01']}]},
+  {dim:3,buttons:[{no:1,text:'C',skuId:third.slice(0,-2)+'01',skuList:[third.slice(0,-2)+'01']}]}]}};
+ fs.writeFileSync(file,JSON.stringify(data));
+ fs.writeFileSync(path.join(f.stage,'keyword_tasks.json'),JSON.stringify({keyword:[{pid:f.first,row:3},{pid:third,row:4},{pid:f.second,row:5}]}));
+ const r=run(f);assert.equal(r.status,0,r.stderr+'\n'+r.stdout);
+ const state=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));
+ assert.equal(state.state,'DATA_COMPLETE');assert.equal(state.unavailable,1);
+ const err=JSON.parse(fs.readFileSync(path.join(f.stage,'errors',third+'.json'),'utf8'));
+ assert.equal(err.reason,'PRODUCT_UNAVAILABLE');assert.equal(err.evidence.failureType,'SKU_MATRIX_INVALID');
+ for(const id of [f.first,f.second])assert.ok(fs.existsSync(path.join(f.stage,'data',id+'.json')));
+ assert.equal(run(f).status,0);
+ const resumed=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(resumed.unavailable,1);assert.equal(resumed.requests,0);
+});
 test('missing prices get one real supplementary pass, never ordinary-price fallback',()=>{
  const f=fixture();const file=path.join(f.runtime,'fixture.json');const data=JSON.parse(fs.readFileSync(file,'utf8'));
  for(const raw of Object.values(data)){delete raw.bestPromotion;raw.warePriceGatherVO={priceItemList:[{priceType:'jdPrice',price:'9.25'}]};}

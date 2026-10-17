@@ -57,6 +57,7 @@ try{
   for(const pid of ids){
    let unavailable=false;try{unavailable=json(path.join(stage,'errors',pid+'.json')).reason==='PRODUCT_UNAVAILABLE'}catch{}
    if(unavailable){state.unavailable++;continue}
+   try{
    const known=validCache(pid)||partialCache(pid)?.data;
    if(known&&options.mainOnly)continue;
    if(known){const needed=cacheRows(pid).filter(r=>shouldRequest({validCache:!!validCache(r.sku),partialCache:partialCache(r.sku),recheckPrices:options.recheckPrices}));if(!needed.length)continue}
@@ -67,7 +68,9 @@ try{
    const opened=await openNativePage(owner,Page,sendCommandFull,context,pid);current=opened;
    state.requests++;finishRequest();
    if(!opened.result.ok){
-    if(opened.result.reason==='PRODUCT_UNAVAILABLE'){atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE'});state.unavailable++;await opened.page.closeTab(opened.tab);current=null;continue}
+    if(opened.result.reason==='PRODUCT_UNAVAILABLE'||opened.result.reason==='PRODUCT_UNAVAILABLE_REDIRECT'){
+     const evidence=opened.result.reason==='PRODUCT_UNAVAILABLE_REDIRECT'?{itemPageRedirectedTo:'https://www.jd.com/'}:undefined;
+     atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE',...(evidence?{evidence}:{})});state.unavailable++;await opened.page.closeTab(opened.tab);current=null;continue}
     halt(opened.result.reason);
    }
    const initialState=save(pid,opened.result.data,'live_native_page');
@@ -93,6 +96,14 @@ try{
    }
    await opened.page.closeTab(opened.tab);current=null;
    if(state.state==='COOLDOWN_REQUIRED')break;
+   }catch(e){
+    if(e.message!=='SKU_MATRIX_INVALID')throw e;
+    // Deterministic per-product spec-matrix failure: isolate to the failure list, never halt the batch.
+    if(current){try{await current.page.closeTab(current.tab)}catch{};current=null}
+    atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE',evidence:{failureType:'SKU_MATRIX_INVALID'}});
+    state.unavailable++;checkpoint({currentProduct:pid,currentSku:pid});
+    console.log(JSON.stringify({product:pid,state:'PRODUCT_UNAVAILABLE',failureType:'SKU_MATRIX_INVALID'}));
+   }
   }
   if(state.state==='RUNNING'){
    const partialDir=path.join(stage,'partial_data');const partials=fs.existsSync(partialDir)?fs.readdirSync(partialDir).filter(x=>x.endsWith('.json')).map(x=>json(path.join(partialDir,x))):[];

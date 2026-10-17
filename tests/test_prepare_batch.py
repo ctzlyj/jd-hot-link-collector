@@ -118,6 +118,24 @@ class PrepareTests(unittest.TestCase):
         derived=[x for x in tasks['泡脚袋'] if x.get('linkDerived')]
         self.assertEqual([x['pid'] for x in derived],['10236988038434','10124934963520'])
 
+    def test_b_keyword_layout_ignores_a_column_index(self):
+        rows=[[None,'热得快烧水棒安全自动断电']+[None]*12,
+              [None,'主图','标题','商品ID','类型',None,None,None,None,None,None,None,None,None],
+              [None,'https://img14.360buyimg.com/x.jpg','烧水棒','10229393598698','京东物流',None,None,None,None,None,None,None,None,None],
+              ['鼻毛修剪器男生','https://img14.360buyimg.com/y.jpg','粘毛器','10170865095015','官方暂无数据',None,None,None,None,None,None,None,None,None],
+              ['通马桶疏通神器',None,None,None,None,None,None,None,None,None,None,None,None,None],
+              ['刮脚去皮神器','室内温湿度计',None,None,None,None,None,None,None,None,None,None,None,None],
+              ['泡脚桶可折叠','https://img14.360buyimg.com/z.jpg','温湿度计','10039121935421',None,None,None,None,None,None,None,None,None,None],
+              [None,'鼻毛修剪器男生',None,None,None,None,None,None,None,None,None,None,None,None],
+              ['霍尼韦尔化妆镜','https://img14.360buyimg.com/w.jpg','鼻毛剪','10236626990804',None,None,None,None,None,None,None,None,None,None],
+              [None,'https://img14.360buyimg.com/v.jpg','电动鼻毛剪','10226542305146',None,None,None,None,None,None,None,None,None,None]]
+        self.assertEqual(detect_layout(rows),'alternate')
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['热得快烧水棒安全自动断电','室内温湿度计','鼻毛修剪器男生'])
+        self.assertEqual([x['pid'] for x in tasks['热得快烧水棒安全自动断电']],['10229393598698','10170865095015'])
+        self.assertEqual(tasks['室内温湿度计'][0]['title'],'温湿度计')
+        self.assertEqual([x['pid'] for x in tasks['鼻毛修剪器男生']],['10236626990804','10226542305146'])
+
 if __name__=='__main__':unittest.main()
 
 

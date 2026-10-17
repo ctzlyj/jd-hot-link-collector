@@ -34,6 +34,9 @@ export async function waitNativePage(page,sku,{timeoutMs=45000,afterCount=null,s
   await sleep(1000);const state=decode(await page.evaluate(afterCount!==null?completedRequestState(sku):nativePageState));
   if(state.isChallenge)return {ok:false,reason:'VERIFICATION_REQUIRED'};
   if(state.isFrequencyPage)return {ok:false,reason:'PAGE_FREQUENCY_LIMIT'};
+  // An item URL that lands on the JD homepage is a dead product page; report it
+  // immediately instead of burning the full timeout on a transport-looking stall.
+  if(state.host==='www.jd.com'&&(!state.path||state.path==='/'))return {ok:false,reason:'PRODUCT_UNAVAILABLE_REDIRECT'};
   if(!state.apiFinished||(afterCount!==null&&state.completed!==undefined&&state.completed<=afterCount))continue;
   // Network capture is destructive. Read only after loadingFinished, never on requestWillBeSent.
   await sleep(250);const result=capturedBusiness(await page.readNetworkCapture(),sku);
