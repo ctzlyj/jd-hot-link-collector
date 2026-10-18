@@ -8,8 +8,15 @@ def _pad(row):
     if len(values) < 13: values += [None] * (13 - len(values))
     return values[:13]
 
+def _has_keyword_rows(rows):
+    for row in rows:
+        values = _pad(row)
+        if keyword_cell(values, 0) and not any(v not in (None, '') for v in values[1:]): return True
+        if keyword_cell(values, 1) and not any(v not in (None, '') for v in values[:1] + values[2:]): return True
+    return False
+
 def detect_layout(rows):
-    """Pick standard B/C/M, A-keyword/D-pid, or A-url/B-title/C-pid listing layouts by evidence only."""
+    """Pick standard, listing, alternate or flat layouts by evidence only."""
     c_pids = d_pids = links = url_first = 0
     for row in rows:
         values = _pad(row)
@@ -17,10 +24,15 @@ def detect_layout(rows):
         if re.fullmatch(r'\d{8,}', str(values[3] or '')): d_pids += 1
         if re.findall(r'item\.jd\.com/(\d+)\.html', str(values[12] or '')): links += 1
         if str(values[0] or '').startswith(('http://', 'https://')): url_first += 1
-    if c_pids and links: return 'standard'
-    # A-url product rows mark the link-less listing layout; other C-pid files
-    # stay standard so the ID/link agreement audit still applies to them.
-    if c_pids and url_first: return 'listing'
+    has_kw = _has_keyword_rows(rows)
+    if c_pids and links and has_kw: return 'standard'
+    # A-url product rows without any keyword section are a flat product list;
+    # with keyword sections they are the link-less listing layout.
+    if c_pids and url_first: return 'flat' if not has_kw else 'listing'
+    if c_pids and links and not has_kw:
+        # C-pid rows with links but no keyword structure and no A-urls stay on the
+        # standard path so a missing keyword header fails loudly instead of guessing.
+        return 'standard'
     # D-pid keyword-sectioned listings (shop-name or other columns may occupy M).
     if d_pids and not c_pids: return 'alternate'
     return 'standard'
@@ -43,8 +55,37 @@ def alternate_keyword_column(rows):
         if keyword_cell(values, 1) and not any(v not in (None, '') for v in values[:1] + values[2:]): b_only += 1
     return 1 if b_only > a_only else 0
 
-def parse_rows(rows):
+def parse_rows_flat(rows, default_keyword='未分组'):
+    """A=url, B=title, C=product id; links may sit in column E or M. No keyword
+    sections exist, so every product joins one bucket named after the source."""
+    products = {}
+    shifted = []
+    link_ids = set()
+    for n, row in enumerate(rows, 1):
+        values = _pad(row)
+        pid = str(values[2] or '').strip()
+        row_links = []
+        for idx in (4, 12):
+            if len(values) > idx:
+                row_links.extend(re.findall(r'item\.jd\.com/(\d+)\.html', str(values[idx] or '')))
+        link_ids.update(row_links)
+        if not re.fullmatch(r'\d{8,}', pid):
+            # Link-only rows: the official item link itself is the product identity.
+            if row_links:
+                item = products.setdefault(row_links[0], {'pid': row_links[0], 'rows': [], 'title': str(values[1] or ''), 'linkDerived': True})
+                item['rows'].append(n)
+            continue
+        item = products.setdefault(pid, {'pid': pid, 'rows': [], 'title': str(values[1] or '')})
+        item['rows'].append(n)
+        if row_links and pid not in row_links:
+            shifted.append({'row': n, 'productId': pid, 'linkProductId': row_links[0]})
+    if link_ids - set(products): raise ValueError('IDS_AND_LINKS_DISAGREE:flat')
+    tasks = {default_keyword: [dict(item, row=item['rows'][0]) for item in products.values()]}
+    return tasks, shifted
+
+def parse_rows(rows, default_keyword='未分组'):
     layout = detect_layout(rows)
+    if layout == 'flat': return parse_rows_flat(rows, default_keyword)
     if layout == 'alternate': return parse_rows_alternate(rows, alternate_keyword_column(rows))
     parser = {'standard': parse_rows_standard, 'listing': parse_rows_listing}[layout]
     return parser(rows)
@@ -130,10 +171,12 @@ def parse_rows_standard(rows):
     tasks = {kw: [dict(item, row=item['rows'][0]) for item in sec['products'].values()] for kw, sec in sections.items()}
     return tasks, shifted
 
-def parse_batch(rows):
+def parse_batch(rows, default_keyword='未分组'):
     """Parse, then keep only the first occurrence of a product id across keyword sections."""
     layout = detect_layout(rows)
-    if layout == 'alternate':
+    if layout == 'flat':
+        tasks, shifted = parse_rows_flat(rows, default_keyword)
+    elif layout == 'alternate':
         tasks, shifted = parse_rows_alternate(rows, alternate_keyword_column(rows))
     else:
         parser = {'standard': parse_rows_standard, 'listing': parse_rows_listing}[layout]
@@ -171,7 +214,7 @@ def main():
     wb = load_workbook(source, read_only=True, data_only=False)
     try: rows = list(wb.active.values)
     finally: wb.close()
-    tasks, shifted, layout, duplicates, total_rows = parse_batch(rows)
+    tasks, shifted, layout, duplicates, total_rows = parse_batch(rows, source.stem)
     link_derived = sum(1 for items in tasks.values() for x in items if x.get('linkDerived'))
     stage = Path(a.state_dir).expanduser().resolve() if a.state_dir else root / '.collector_state'
     stage.mkdir(parents=True, exist_ok=True)

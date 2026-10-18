@@ -108,5 +108,18 @@ class DeliverTests(unittest.TestCase):
             self.assertTrue(any(n.startswith('香薰/商品C/') for n in names))
             self.assertFalse(any(n.startswith('香薰/商品A/') for n in names))
 
+    def test_oversized_keyword_splits_by_product(self):
+        root, stage = self.batch([{'kw': '巨型关键词', 'title': 'p%d' % i, 'pid': '%d' % (100000000001 + i), 'size': 400 * 1024} for i in range(3)])
+        items = verified_items(json.loads((stage / 'independent_validation.json').read_text(encoding='utf-8-sig')), stage, root)
+        bins = keyword_bins(items, 1)
+        self.assertEqual(len(bins), 2)
+        for b in bins:
+            self.assertLessEqual(sum(x['size'] for x in b['items']), 1024 * 1024)
+        pids = [x['pid'] for b in bins for x in b['items']]
+        self.assertEqual(sorted(pids), ['100000000001', '100000000002', '100000000003'])
+        for b in bins:
+            self.assertEqual(len({x['pid'] for x in b['items']}), len(b['items']))
+
 if __name__ == '__main__': unittest.main(verbosity=2)
+
 

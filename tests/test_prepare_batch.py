@@ -79,10 +79,13 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual([x['pid'] for x in tasks['磨砂玻璃贴膜']],['10215516291374','10137594710934'])
         self.assertEqual(tasks['磨砂玻璃贴膜'][0]['title'],'防窥膜')
         self.assertEqual(shifted,[])
-    def test_listing_layout_header_row_is_not_keyword(self):
+    def test_keywordless_header_rows_fall_back_to_flat_bucket(self):
         rows=[['主图','标题','商品ID',None,None,None,None,None,None,None,None,None,None],
               ['https://img14.360buyimg.com/n1/jfs/x.jpg','t','10215516291374',None,None,None,None,None,None,None,None,None,None]]
-        with self.assertRaises(ValueError):parse_rows(rows)
+        self.assertEqual(detect_layout(rows),'flat')
+        tasks,shifted=parse_rows(rows)
+        self.assertEqual(list(tasks),['未分组'])
+        self.assertEqual(tasks['未分组'][0]['pid'],'10215516291374')
     def test_standard_without_links_parses_as_listing(self):
         rows=[['kw']+[None]*12,
               ['https://img14.360buyimg.com/n1/jfs/x.jpg','t','100000000001',None,None,None,None,None,None,None,None,None,None]]
@@ -136,7 +139,29 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(tasks['室内温湿度计'][0]['title'],'温湿度计')
         self.assertEqual([x['pid'] for x in tasks['鼻毛修剪器男生']],['10236626990804','10226542305146'])
 
+    def test_flat_link_list_without_keywords(self):
+        rows=[['主图','标题','商品ID','评价数','商品链接',None,None,None,None,None,None,None,None],
+              ['https://img14.360buyimg.com/x.jpg','暖手袋','10234399604712','0','https://item.jd.com/10234399604712.html',None,None,None,None,None,None,None,None],
+              ['https://img14.360buyimg.com/y.jpg','暖手宝','10234399640716','0','https://item.jd.com/10234399640716.html',None,None,None,None,None,None,None,None],
+              ['主图','标题','商品ID','类型','价格','到手价','原价','补贴金额','商品标签','评价数','总销量','店铺','商品链接'],
+              ['https://img14.360buyimg.com/z.jpg','暖水袋','10234759293531','官方暂无数据','85','85','85','0','包邮','2','官方暂无数据','朴多店','https://item.jd.com/10234759293531.html']]
+        self.assertEqual(detect_layout(rows),'flat')
+        tasks,shifted=parse_rows(rows,'默认关键词')
+        self.assertEqual(list(tasks),['默认关键词'])
+        self.assertEqual([x['pid'] for x in tasks['默认关键词']],['10234399604712','10234399640716','10234759293531'])
+        self.assertEqual(tasks['默认关键词'][2]['title'],'暖水袋')
+        self.assertEqual(shifted,[])
+    def test_flat_link_list_derives_products_from_link_only_rows(self):
+        rows=[['https://img14.360buyimg.com/x.jpg','暖手袋','10234399604712','0','https://item.jd.com/10234399604712.html',None,None,None,None,None,None,None,None],
+              [None,None,None,None,'https://item.jd.com/10211587163470.html',None,None,None,None,None,None,None,None]]
+        tasks,shifted=parse_rows(rows,'默认关键词')
+        derived=[x for x in tasks['默认关键词'] if x.get('linkDerived')]
+        self.assertEqual([x['pid'] for x in derived],['10211587163470'])
+        self.assertEqual(len(tasks['默认关键词']),2)
+
 if __name__=='__main__':unittest.main()
+
+
 
 
 

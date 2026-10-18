@@ -60,7 +60,8 @@ def write_manifest(items, path, incremental=False):
     wb.save(str(path))
 
 def keyword_bins(items, max_mb):
-    """Group whole keywords into size-bounded bins; a keyword larger than the cap is an error."""
+    """Group whole keywords into size-bounded bins. A single keyword larger than the
+    cap (e.g. one flat-list bucket) is split at product granularity instead of failing."""
     kw_size = {}; kw_items = {}
     for x in items:
         size = sum(f.stat().st_size for f in x['folder'].rglob('*') if f.is_file())
@@ -70,17 +71,24 @@ def keyword_bins(items, max_mb):
     if not max_mb:
         return [{'keywords': list(kw_items), 'items': items}]
     cap = max_mb * 1024 * 1024
-    for kw, size in kw_size.items():
-        if size > cap: raise ValueError('KEYWORD_EXCEEDS_SIZE_CAP:' + kw)
-    bins = [{'size': 0, 'keywords': []}]
+    for x in items:
+        if x['size'] > cap: raise ValueError('PRODUCT_EXCEEDS_SIZE_CAP:' + x['pid'])
+    oversize = {kw for kw, size in kw_size.items() if size > cap}
+    units = []
     for kw in sorted(kw_size, key=lambda k: -kw_size[k]):
+        if kw in oversize:
+            for x in sorted(kw_items[kw], key=lambda y: -y['size']):
+                units.append({'keywords': [kw], 'items': [x], 'size': x['size']})
+        else:
+            units.append({'keywords': [kw], 'items': kw_items[kw], 'size': kw_size[kw]})
+    bins = [{'size': 0, 'keywords': [], 'items': []}]
+    for unit in units:
         target = min(bins, key=lambda b: b['size'])
-        if target['size'] + kw_size[kw] > cap:
-            target = {'size': 0, 'keywords': []}
+        if target['size'] + unit['size'] > cap:
+            target = {'size': 0, 'keywords': [], 'items': []}
             bins.append(target)
-        target['keywords'].append(kw); target['size'] += kw_size[kw]
-    for b in bins:
-        b['items'] = [x for kw in b['keywords'] for x in kw_items[kw]]
+        target['keywords'].extend(unit['keywords']); target['items'].extend(unit['items'])
+        target['size'] += unit['size']
     return bins
 
 def write_zip(items, zip_path, manifest_path, manifest_entry):
