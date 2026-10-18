@@ -54,6 +54,20 @@ def details(spu):
     # malformed documents raise DETAIL_FORMAT_INVALID in ordered_detail_urls.
     atomic_json(p,data);return data
 
+def _detail_jobs(urls, folder, save):
+    """Download detail images at their source positions; 404 links are dead on the
+    source CDN, so they are recorded and skipped instead of failing the product.
+    Any other download failure still raises."""
+    jobs=[];dead=[]
+    for i,u in enumerate(urls,1):
+        dest=folder/f'详情图_{i}.jpg'
+        try:
+            save(u,dest);jobs.append((u,dest))
+        except Exception as e:
+            if getattr(getattr(e,'response',None),'status_code',None)==404:dead.append(u)
+            else:raise
+    return jobs,dead
+
 def plan_product(keyword,item,known_names):
     pid=item['pid'];error=STAGE/'errors'/f'{pid}.json'
     # An unavailable verdict wins even when partial main data was collected first
@@ -81,7 +95,8 @@ def plan_product(keyword,item,known_names):
     for name in ['主图','详情图','SKU图','主图视频']:(temp/name).mkdir(exist_ok=True)
     jobs=[]
     for i,c in enumerate([c for c in main['carousel'] if c.get('u')],1):jobs.append((image_url(c['u']),temp/'主图'/f'主图_{i}.jpg'))
-    for i,u in enumerate(details(main['realSpuId']),1):jobs.append((u,temp/'详情图'/f'详情图_{i}.jpg'))
+    detail_jobs,dead_detail_urls=_detail_jobs(details(main['realSpuId']),temp/'详情图',save_jpeg)
+    jobs.extend(detail_jobs)
     names=set()
     for row in rows:
         image=row['image'] or next((c['u'] for c in prices[row['sku']]['carousel'] if c.get('u')),'')
@@ -108,7 +123,7 @@ def plan_product(keyword,item,known_names):
         videos.append({'file':str(vp.relative_to(temp)),**inspect_mp4(vp.read_bytes())})
     matrix=table_matrix(main,rows,prices)
     spec={'headers':HEADERS,'rows':matrix,'output':str(temp/'商品信息.xlsx')}
-    metadata={'sourceSku':pid,'keyword':keyword,'title':main['title'],'finalFolder':str(final),'variants':rows,'arrivalPrices':{r['sku']:prices[r['sku']]['pp'] for r in rows},'expectedImages':len(jobs),'videos':videos,'priceSource':'live_signed_page','priceSources':{r['sku']:prices[r['sku']].get('priceSource','bestPromotion.purchasePrice') for r in rows},'collectedAt':datetime.now(timezone.utc).isoformat(),'state':'AWAITING_WORKBOOK'}
+    metadata={'sourceSku':pid,'keyword':keyword,'title':main['title'],'finalFolder':str(final),'variants':rows,'arrivalPrices':{r['sku']:prices[r['sku']]['pp'] for r in rows},'expectedImages':len(jobs),'videos':videos,'deadDetailUrls':dead_detail_urls,'priceSource':'live_signed_page','priceSources':{r['sku']:prices[r['sku']].get('priceSource','bestPromotion.purchasePrice') for r in rows},'collectedAt':datetime.now(timezone.utc).isoformat(),'state':'AWAITING_WORKBOOK'}
     atomic_json(temp/'package_metadata.json',metadata)
     return {'pid':pid,'keyword':keyword,'state':'AWAITING_WORKBOOK','spec':spec,'metadata':metadata,'temp':str(temp),'final':str(final)}
 

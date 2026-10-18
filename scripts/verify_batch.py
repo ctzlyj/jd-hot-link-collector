@@ -28,6 +28,10 @@ def run():
     if not detail_cache.is_file():raise ValueError('DETAIL_SOURCE_CACHE_MISSING')
     detail_urls=json.loads(detail_cache.read_text(encoding='utf-8-sig'))
     entries=expected_media_entries(main,rows,prices,detail_urls,safe_name,image_url)
+    # Detail links that were dead on the source CDN are recorded per product; they must
+    # be absent from both the expected media set and the delivered folder.
+    dead_detail=set(metadata.get('deadDetailUrls') or [])
+    entries=[e for e in entries if e['url'] not in dead_detail]
     verified_media=verify_media_evidence(folder,STAGE,entries)
     expected=table_matrix(main,rows,prices);verify_table(folder/'商品信息.xlsx',metadata)
     wb=load_workbook(folder/'商品信息.xlsx',read_only=True,data_only=False);actual=list(wb.active.values)[1:];wb.close()
