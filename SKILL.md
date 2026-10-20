@@ -27,6 +27,16 @@ description: 将京东商品链接清单采集为关键词/商品标题命名的
 
 `--root path` 与 `--root=path` 均支持。旧批次状态可显式用 `--state-dir=<旧状态目录>`；素材脚本对应设置任务级 `JD_COLLECTOR_STATE_DIR`。迁移不覆盖已有商品包、示例、源表格或价格证据。
 
+## 整批驱动（scripts/batch_driver/）
+
+大批量用有界驱动链自动跑完整个授权范围，全部能力来自上面各脚本：
+
+- 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（≥5000）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。
+- 恢复入口按停止原因分流：本地传输瞬断 `resume_after_local_recovery.py`；验证/频控走 keeper 冷却；运营者隔离停摆商品后 `resume_after_stall_isolated.py`；另有 platform_cooldown / verification / abrupt_runner / material_recovery / pacing_change 各入口。
+- 同一商品/SKU 连续 3 次瞬态停摆视为确定性商品失败：驱动器自动写入 `errors/` 失败清单（failureType=STALL_原因）并继续整批，不再拦停整个范围；平台级原因（验证、频控、登录）仍然立即停止。
+- `monitor_batch.ps1 -Stage <状态目录> -Minutes N` 做后台轮询监控。
+- 跨批同源商品重建：`prior_receipts.py` 索引旧批回执，同 pid 旧包移入本批备份后按当前数据重建；无法证明归属的同名目录仍然硬失败。
+
 ## 到手价和顺序
 
 - 优先未划线的 `warePriceGatherVO.priceItemList` 的 `priceType=finalPrice`；无该项才用 `bestPromotion.purchasePrice`。不以 `price.p`、普通 `jdPrice`、历史价或券额推算补缺。
