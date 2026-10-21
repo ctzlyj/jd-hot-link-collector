@@ -150,7 +150,15 @@ def parse_rows_standard(rows):
             sections.setdefault(keyword, {'products': {}, 'linkIds': set()})
             continue
         if not pid and not links: continue
-        if keyword is None: raise ValueError('PRODUCT_BEFORE_KEYWORD_SECTION:' + str(n))
+        if keyword is None:
+            # The first product row may carry the keyword in column A alongside product
+            # data (keyword-on-same-row format); recognize it before failing.
+            first_kw = keyword_cell(values, 0)
+            if first_kw and re.search(r'[一-鿿]', first_kw):
+                keyword = first_kw
+                sections.setdefault(keyword, {'products': {}, 'linkIds': set()})
+            else:
+                raise ValueError('PRODUCT_BEFORE_KEYWORD_SECTION:' + str(n))
         sec = sections.setdefault(keyword, {'products': {}, 'linkIds': set()})
         sec['linkIds'].update(links)
         # Header/label rows carry neither a numeric product id nor a product link; skip them.
@@ -167,7 +175,7 @@ def parse_rows_standard(rows):
         if links and pid not in links:
             shifted.append({'row': n, 'productId': pid, 'linkProductId': links[0]})
     for kw, sec in sections.items():
-        if set(sec['products']) != sec['linkIds']: raise ValueError('IDS_AND_LINKS_DISAGREE:' + kw)
+        if sec['linkIds'] and set(sec['products']) != sec['linkIds']: raise ValueError('IDS_AND_LINKS_DISAGREE:' + kw)
     tasks = {kw: [dict(item, row=item['rows'][0]) for item in sec['products'].values()] for kw, sec in sections.items()}
     return tasks, shifted
 

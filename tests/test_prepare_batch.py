@@ -21,8 +21,16 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(shifted,[
             {'row':2,'productId':'100000001','linkProductId':'100000002'},
             {'row':3,'productId':'100000002','linkProductId':'100000001'}])
+    def test_sections_without_links_pass_without_disagreement(self):
+        # Products with no links at all are fine; the link column is supplementary.
+        tasks,shifted=parse_rows([['kw']+[None]*12,product('100000001','')])
+        self.assertEqual(len(tasks['kw']),1)
     def test_id_link_set_disagreement_rejected(self):
-        with self.assertRaises(ValueError):parse_rows([['kw']+[None]*12,product('100000001','header')])
+        # Valid links that point to products outside this section's ID set fail.
+        rows=[['kw']+[None]*12,
+              product('100000001',''),
+              [None]*12+['https://item.jd.com/99999999999999.html']]
+        with self.assertRaises(ValueError):parse_rows(rows)
     def test_product_before_keyword_rejected(self):
         with self.assertRaises(ValueError):parse_rows([HEADER,product('100000001','https://item.jd.com/100000001.html')])
     def test_invalid_product_id_rejected(self):
