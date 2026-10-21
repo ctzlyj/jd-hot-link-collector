@@ -10,6 +10,11 @@ class PackageTests(unittest.TestCase):
   import json
   data='showdesc('+json.dumps({'content':'<div style="background:url(https://img10.360buyimg.com/a.jpg)"></div><img src="https://img10.360buyimg.com/b.jpg"><img src="https://img10.360buyimg.com/a.jpg">'})+')'
   self.assertEqual(ordered_detail_urls(data),['https://img10.360buyimg.com/a.jpg','https://img10.360buyimg.com/b.jpg'])
+ def test_malformed_nested_img_urls_are_rejected(self):
+  import json as _json
+  data='showdesc('+_json.dumps({'content':'<p><img style="max-width:790px;" data-lazyload="http://<div><img style=\\"width:auto;\\" data-lazyload=\\"//img10.360buyimg.com/imgzone/jfs/x.jpg\\">" data-lazyload="//img10.360buyimg.com/imgzone/jfs/ok.jpg"> '})+')'
+  assert 'img10.360buyimg.com/imgzone/jfs/ok.jpg' in data
+  self.assertEqual(ordered_detail_urls(data),['https://img10.360buyimg.com/imgzone/jfs/ok.jpg'])
  def test_price_rows_follow_frontend_order_and_only_first_title(self):
   data={'title':'商品','attrs':[],'crumbs':[{'text':'类目'}],'colorSize':[]}
   rows=[{'sku':'b','spec1':'主推','spec2':'','image':''},{'sku':'a','spec1':'其次','spec2':'','image':''}]

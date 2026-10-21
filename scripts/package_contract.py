@@ -17,7 +17,10 @@ def ordered_detail_urls(payload):
     for match in re.finditer(pattern,content,re.I):
         u=(match.group(1) or match.group(2)).strip()
         if u.startswith('//'):u='https:'+u
-        if u.startswith(('http://','https://')) and u not in out:out.append(u)
+        # Merchant HTML sometimes nests a broken img tag whose data-lazyload value is
+        # escaped markup (e.g. "http://<div><img style="). Only accept URLs with a
+        # real hostname followed by a path separator.
+        if re.match(r'^https?://[A-Za-z0-9.-]+(?::\d+)?/',u) and u not in out:out.append(u)
     return out
 
 def table_matrix(main,variants,prices):
