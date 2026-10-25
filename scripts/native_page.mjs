@@ -44,8 +44,8 @@ export async function waitNativePage(page,sku,{timeoutMs=45000,afterCount=null,s
  }
  return {ok:false,reason:'INITIAL_RESPONSE_MISSING'};
 }
-export async function openNativePage(owner,Page,sendCommandFull,context,sku){
- const tab=await owner.newTab();const page=new Page(context.session,context.idleTimeout,undefined,'background');page.setActivePage(tab);
+export async function openNativePage(owner,Page,sendCommandFull,context,sku,reuseTab){
+ const tab=reuseTab||await owner.newTab();const page=new Page(context.session,context.idleTimeout,undefined,'background');page.setActivePage(tab);
  try{
   const started=await page.startNetworkCapture('pc_detailpage_wareBusiness');
   if(started===false)throw Error('NETWORK_CAPTURE_UNSUPPORTED');

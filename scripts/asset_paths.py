@@ -47,3 +47,11 @@ def final_state(initial, detail_count, missing_count, price_complete):
 
 def save_jpeg(url, destination):
     return save_cached_jpeg(url, destination, CACHE, STAGE, get_public)
+
+# JD image CDNs publish AAAA records whose IPv6 path stalls ~40s before falling back
+# to IPv4; pin this process to IPv4 so media downloads stay fast.
+import socket as _socket
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_getaddrinfo

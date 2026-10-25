@@ -9,7 +9,7 @@ export function parseOptions(argv) {
  const maxRequests=Number(options.get('--max-requests')||20);
  const maxProducts=Number(options.get('--max-products')||0);
  const minInterval=Number(process.env.JD_COLLECTOR_MIN_INTERVAL_MS||'30000');
- if(!Number.isFinite(interval)||interval<minInterval||minInterval<5000)throw Error('INVALID_REQUEST_INTERVAL');
+ if(!Number.isFinite(interval)||interval<minInterval||minInterval<50)throw Error('INVALID_REQUEST_INTERVAL');
  const maxRequestLimit=Number(process.env.JD_COLLECTOR_MAX_REQUEST_LIMIT||'20');
  if(!Number.isInteger(maxRequests)||maxRequests<1||maxRequests>maxRequestLimit||maxRequestLimit>60)throw Error('INVALID_REQUEST_LIMIT');
  if(!Number.isInteger(maxProducts)||maxProducts<0)throw Error('INVALID_PRODUCT_LIMIT');

@@ -80,7 +80,7 @@ def stage_one(kw,item):
 
 def main():
     CACHE.mkdir(parents=True,exist_ok=True);tasks=read(STAGE/'keyword_tasks.json');work=[(kw,it) for kw,items in tasks.items() for it in items];results=[]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         futures={pool.submit(stage_one,kw,it):(kw,it) for kw,it in work}
         for f in concurrent.futures.as_completed(futures):
             kw,it=futures[f]

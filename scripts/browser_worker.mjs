@@ -60,6 +60,16 @@ function dispatch(sku,classify,project,validate){
  return JSON.stringify({ok:true,phase:'STARTED',sku});
 }
 
+export function collectExpression(sku){
+ if(!/^\d{8,}$/.test(String(sku)))throw Error('INVALID_SKU');
+ const body=`(async()=>{const started=JSON.parse((${dispatch.toString()})(${JSON.stringify(String(sku))},${classifyResponse.toString()},${project.toString()},${validate.toString()}));if(!started.ok)return JSON.stringify(started);const deadline=Date.now()+20000;while(Date.now()<deadline){await new Promise(r=>setTimeout(r,50));const job=window.__jdCollectorJob;if(job&&job.phase==='DONE')return JSON.stringify(job);}return JSON.stringify({phase:'TIMEOUT'});})()`;
+ return body;
+}
+export function collectBatchExpression(skus){
+ const list=skus.map(s=>String(s));
+ for(const s of list)if(!/^\d{8,}$/.test(s))throw Error('INVALID_SKU');
+ return `(async()=>{const out=[];const skus=${JSON.stringify(list)};const dispatch=${dispatch.toString()};const classify=${classifyResponse.toString()};const project=${project.toString()};const validate=${validate.toString()};for(const sku of skus){const started=JSON.parse(dispatch(sku,classify,project,validate));if(!started.ok){out.push({sku,result:started});continue}const deadline=Date.now()+20000;let job=null;while(Date.now()<deadline){await new Promise(r=>setTimeout(r,25));job=window.__jdCollectorJob;if(job&&job.phase==='DONE')break}out.push({sku,result:job&&job.phase==='DONE'?job:{phase:'TIMEOUT'}})}return JSON.stringify(out)})()`;
+}
 export function startExpression(sku){
  if(!/^\d{8,}$/.test(String(sku)))throw Error('INVALID_SKU');
  return `(${dispatch.toString()})(${JSON.stringify(String(sku))},${classifyResponse.toString()},${project.toString()},${validate.toString()})`;

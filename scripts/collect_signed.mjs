@@ -1,8 +1,8 @@
 /** Interface-first collection: one native page context per source product, no per-SKU navigation. */
 import fs from 'node:fs';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validate} from './request_policy.mjs';
-import {startExpression,readExpression,pageStateExpression,abortExpression} from './browser_worker.mjs';
-import {parseOptions,shouldRequest,unresolvedPrices,waitUntilNext,partialRecheckEvidence} from './collection_policy.mjs';
+import {startExpression,readExpression,pageStateExpression,abortExpression,collectExpression,collectBatchExpression} from './browser_worker.mjs';
+import {parseOptions,shouldRequest,unresolvedPrices,waitUntilNext,partialRecheckEvidence,PRICE_RECHECK_VERSION} from './collection_policy.mjs';
 import {taskContext} from './task_context.mjs';
 import {acquireRunnerLock} from './runner_lock.mjs';
 import {variantRows} from './variant_bridge.mjs';
@@ -20,7 +20,14 @@ function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});co
 const goodSource=new Set(['live_signed_page','live_native_page']);
 function validCache(sku){const file=path.join(stage,'data',sku+'.json');try{const saved=json(file);if(!goodSource.has(saved.source))return null;return validate(sku,saved.data)}catch{return null}}
 function partialCache(sku){try{return json(path.join(stage,'partial_data',sku+'.json'))}catch{return null}}
-function cacheRows(sku){const main=validCache(sku);const file=path.join(stage,main?'data':'partial_data',sku+'.json');return variantRows(path.join(dir,'variant_queue.py'),file)}
+function cacheRows(sku){
+ const main=validCache(sku);const file=path.join(stage,main?'data':'partial_data',sku+'.json');
+ let key='';try{const st=fs.statSync(file);key=st.mtimeMs+'-'+st.size}catch{}
+ const cacheFile=path.join(stage,'rows',sku+'.json');
+ if(key){try{const c=JSON.parse(fs.readFileSync(cacheFile,'utf8'));if(c&&c.key===key&&Array.isArray(c.rows))return c.rows}catch{}}
+ const rows=variantRows(path.join(dir,'variant_queue.py'),file);
+ if(key){try{fs.mkdirSync(path.join(stage,'rows'),{recursive:true});fs.writeFileSync(cacheFile,JSON.stringify({key,rows}))}catch{}}
+ return rows}
 const state={state:'STARTING',pid:process.pid,startedAt:new Date().toISOString(),route:'per-product-native-xhr',successful:0,partial:0,requests:0,products:0,navigations:0,unavailable:0,reason:null,intervalMs:options.interval,maxRequests:options.maxRequests};
 const stateFile=path.join(stage,'runner_state.json'),clockFile=path.join(stage,'request_clock.json');
 function checkpoint(fields={}){Object.assign(state,fields,{updatedAt:new Date().toISOString()});atomic(stateFile,state)}
@@ -43,7 +50,7 @@ function save(sku,data,source){
  }
  return 'PRICE_VERIFIED';
 }
-let release,owner,current;
+let release,owner,current;let taskTab=null;
 try{
  release=acquireRunnerLock(stage);
  if(!options.runRequested){checkpoint({state:'READY_NOT_RUNNING'});console.log(JSON.stringify({state:state.state,route:state.route}));}
@@ -52,6 +59,8 @@ try{
   const {Page}=await import(pathToFileURL(context.wcli.page).href);
   const {sendCommandFull}=await import(pathToFileURL(path.join(path.dirname(context.wcli.page),'daemon-client.js')).href);
   owner=new Page(context.session,context.idleTimeout,undefined,'background');
+  // Close task tabs left behind by an interrupted round so Chrome memory does not grow.
+  try{const stale=await owner.listTabs();for(const t of stale){if(!t||!t.url||!String(t.url).includes('item.jd.com'))continue;if(context.tab&&t.page===context.tab)continue;try{await owner.closeTab(t.page)}catch{}}}catch{}
   const tasks=json(path.join(stage,'keyword_tasks.json'));
   const ids=[...new Set(Object.values(tasks).flat().map(x=>String(x.pid)))];checkpoint({state:'RUNNING',sourceProducts:ids.length});
   for(const pid of ids){
@@ -65,41 +74,46 @@ try{
    // The document also calls the business interface. Share its throttle with SKU requests.
    await sleep(waitUntilNext(Date.now(),clock(),Math.max(Number(process.env.JD_COLLECTOR_NAV_MIN_MS||'60000'),options.interval)));
    state.products++;state.navigations++;checkpoint({currentProduct:pid,currentSku:pid});
-   const opened=await openNativePage(owner,Page,sendCommandFull,context,pid);current=opened;
+   const opened=await openNativePage(owner,Page,sendCommandFull,context,pid,taskTab);if(!taskTab)taskTab=opened.tab;current=opened;
    state.requests++;finishRequest();
    if(!opened.result.ok){
     if(opened.result.reason==='PRODUCT_UNAVAILABLE'||opened.result.reason==='PRODUCT_UNAVAILABLE_REDIRECT'){
      const evidence=opened.result.reason==='PRODUCT_UNAVAILABLE_REDIRECT'?{itemPageRedirectedTo:'https://www.jd.com/'}:undefined;
-     atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE',...(evidence?{evidence}:{})});state.unavailable++;await opened.page.closeTab(opened.tab);current=null;continue}
+     atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE',...(evidence?{evidence}:{})});state.unavailable++;current=null;continue}
     halt(opened.result.reason);
    }
    const initialState=save(pid,opened.result.data,'live_native_page');
    const rows=cacheRows(pid);
    await opened.page.evaluate(`window.__jdNativeRequestContext.allowedSkuIds=${JSON.stringify(rows.map(r=>r.sku))};undefined`);
    console.log(JSON.stringify({product:pid,sku:pid,state:initialState,arrivalPrice:opened.result.data.pp,skuCount:rows.length,requests:state.requests}));checkpoint();
-   if(options.mainOnly){await opened.page.closeTab(opened.tab);current=null;continue;}
-   for(const row of rows){
-    const sku=row.sku;if(sku===pid)continue;
-    if(!shouldRequest({validCache:!!validCache(sku),partialCache:partialCache(sku),recheckPrices:options.recheckPrices}))continue;
+   if(options.mainOnly){current=null;continue;}
+   let firstSku=true;
+   const pending=rows.filter(r=>r.sku!==pid&&shouldRequest({validCache:!!validCache(r.sku),partialCache:partialCache(r.sku),recheckPrices:options.recheckPrices}));
+   const BATCH=10;
+   for(let i=0;i<pending.length;i+=BATCH){
     if(state.requests>=options.maxRequests){checkpoint({state:'COOLDOWN_REQUIRED'});break}
+    const slice=pending.slice(i,i+BATCH);
     await sleep(waitUntilNext(Date.now(),clock(),options.interval));
-    const observed=decode(await opened.page.evaluate(pageStateExpression()));
-    if(observed.isFrequencyPage)halt('PAGE_FREQUENCY_LIMIT');if(observed.isChallenge)halt('VERIFICATION_REQUIRED');if(!observed.isTaskItem||observed.pending)halt('PAGE_CHANGED_OR_PENDING');
-    const started=decode(await opened.page.evaluate(startExpression(sku)));if(!started.ok)halt(started.reason);
-    state.requests++;checkpoint({currentSku:sku});let result;const deadline=Date.now()+22000;
-    while(Date.now()<deadline){await sleep(1500);result=decode(await opened.page.evaluate(readExpression));if(result?.phase==='DONE')break}
-    if(result?.phase!=='DONE'){await opened.page.evaluate(abortExpression);halt('REQUEST_RESULT_UNKNOWN')}
+    if(firstSku){const observed=decode(await opened.page.evaluate(pageStateExpression()));if(observed.isFrequencyPage)halt('PAGE_FREQUENCY_LIMIT');if(observed.isChallenge)halt('VERIFICATION_REQUIRED');if(!observed.isTaskItem||observed.pending)halt('PAGE_CHANGED_OR_PENDING');firstSku=false;}
+    const batch=decode(await opened.page.evaluate(collectBatchExpression(slice.map(r=>r.sku))));
+    for(const item of batch){
+     const sku=item.sku;const result=item.result;
+     state.requests++;checkpoint({currentSku:sku});
+     if(result?.phase==='STARTED'){halt(result.reason||'REQUEST_NOT_STARTED')}
+     if(result?.phase==='TIMEOUT'){await opened.page.evaluate(abortExpression);halt('REQUEST_RESULT_UNKNOWN')}
+     if(!result.ok&&result.reason==='PRODUCT_UNAVAILABLE'){atomic(path.join(stage,'errors',sku+'.json'),{sku,reason:'PRODUCT_UNAVAILABLE'});const pc=partialCache(sku);if(pc&&options.recheckPrices)atomic(path.join(stage,'partial_data',sku+'.json'),{...pc,priceRecheckVersion:PRICE_RECHECK_VERSION,priceRecheckedAt:new Date().toISOString()});state.unavailable++;checkpoint();continue}
+     if(!result.ok&&result.reason!=='ARRIVAL_PRICE_MISSING'){checkpoint({retryAfter:result.retryAfter||null});halt(result.reason)}
+     const data=result.data||result.partialData;const priceState=save(sku,data,'live_signed_page');checkpoint();
+     console.log(JSON.stringify({product:pid,sku,state:priceState,arrivalPrice:data.pp,requests:state.requests}));
+    }
     finishRequest();
-    if(!result.ok&&result.reason!=='ARRIVAL_PRICE_MISSING'){checkpoint({retryAfter:result.retryAfter||null});halt(result.reason)}
-    const data=result.data||result.partialData;const priceState=save(sku,data,'live_signed_page');checkpoint();
-    console.log(JSON.stringify({product:pid,sku,state:priceState,arrivalPrice:data.pp,requests:state.requests}));
    }
-   await opened.page.closeTab(opened.tab);current=null;
+   current=null;
    if(state.state==='COOLDOWN_REQUIRED')break;
    }catch(e){
     if(e.message!=='SKU_MATRIX_INVALID')throw e;
     // Deterministic per-product spec-matrix failure: isolate to the failure list, never halt the batch.
-    if(current){try{await current.page.closeTab(current.tab)}catch{};current=null}
+    if(current){if(current.tab!==taskTab){try{await current.page.closeTab(current.tab)}catch{}};current=null}
     atomic(path.join(stage,'errors',pid+'.json'),{sku:pid,reason:'PRODUCT_UNAVAILABLE',evidence:{failureType:'SKU_MATRIX_INVALID'}});
     state.unavailable++;checkpoint({currentProduct:pid,currentSku:pid});
     console.log(JSON.stringify({product:pid,state:'PRODUCT_UNAVAILABLE',failureType:'SKU_MATRIX_INVALID'}));
@@ -114,5 +128,6 @@ try{
 }catch(e){if(e.message==='ANOTHER_RUNNER_OR_UNRESOLVED_LOCK'){state.state='REFUSED';state.reason=e.message}else if(!e.taskStop){checkpoint({state:'HALTED',reason:e.message==='SKU_MATRIX_INVALID'?e.message:'LOCAL_OR_TRANSPORT_ERROR',errorType:e.name})}process.exitCode=2;}
 finally{
  if(current){try{await current.page.closeTab(current.tab)}catch{checkpoint({cleanupPendingTab:current.tab})}}
+ if(taskTab&&(!current||current.tab!==taskTab)){try{await owner.closeTab(taskTab)}catch{}}
  release?.();console.log(JSON.stringify({state:state.state,reason:state.reason,successful:state.successful,partial:state.partial,requests:state.requests,products:state.products,navigations:state.navigations}));
 }

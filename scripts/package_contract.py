@@ -20,7 +20,11 @@ def ordered_detail_urls(payload):
         # Merchant HTML sometimes nests a broken img tag whose data-lazyload value is
         # escaped markup (e.g. "http://<div><img style="). Only accept URLs with a
         # real hostname followed by a path separator.
-        if re.match(r'^https?://[A-Za-z0-9.-]+(?::\d+)?/',u) and u not in out:out.append(u)
+        if not re.match(r'^https?://[A-Za-z0-9.-]+(?::\d+)?/',u):continue
+        # Merchant HTML sometimes yields a host-only or directory-only URL (e.g.
+        # https://img10.360buyimg.com/imgzone/) that the CDN answers with 405.
+        if not re.search(r'\.(?:jpg|jpeg|png|webp)(?:\?|$)',u,re.I) and '/jfs/' not in u:continue
+        if u not in out:out.append(u)
     return out
 
 def table_matrix(main,variants,prices):

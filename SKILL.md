@@ -1,6 +1,7 @@
 ---
 name: jd-hot-link-collector
 description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
+riskLevel: RL3
 ---
 
 # 京东链接素材采集
@@ -18,8 +19,8 @@ description: 将京东商品链接清单采集为关键词/商品标题命名的
 
 1. `python -X utf8 scripts/prepare_batch.py --input <xlsx> --root <目录>`：无网络解析并保存源哈希、行号、关键词与去重范围。
 2. 配置任务会话及本机 WebCLI 模块路径到 `.collector_state/browser_context.json`。接口采集自己创建商品任务页，旧 tab 不是跨机器身份凭据。
-3. **接口优先**：`node scripts/collect_signed.mjs --run --root=<目录> --interval-ms=30000 --max-requests=8`
-   每源商品加载一次原生上下文；同商品 SKU 用页面官方 SDK + XHR，不逐 SKU 翻页。不跨商品复用旧设备上下文，签名和设备头仅在浏览器内存。
+3. **接口优先**：`node scripts/collect_signed.mjs --run --root=<目录> --interval-ms=50 --max-requests=45`
+   每源商品加载一次原生上下文；同商品 SKU 用页面官方 SDK + XHR，不逐 SKU 翻页。不再逐 SKU 往返：一轮只建一个任务标签页并复用，页内一次调用批量取 10 个 SKU。不跨商品复用旧设备上下文，签名和设备头仅在浏览器内存。吞吐与稳定性细节见 `references/throughput-and-stability.md`。
 4. `COOLDOWN_REQUIRED`：保存断点，等待后重新运行；有效原生/接口价格缓存均复用。若是缺价，普通取数阶段继续采其他商品，补价阶段加 `--recheck-prices` 有界核验；默认缺价保持 `ARRIVAL_PRICE_PENDING`，不打包。
 5. 接口失败先读 `references/rate-limit-and-recovery.md` 分流，检查真实失败原因。仅正常页面仍可访问、接口无法覆盖时才使用 `node scripts/click_collector.mjs --root=<目录>`。403/429/频控/验证后先停，不能自动切工具绕过。
 6. `python -X utf8 scripts/package_live.py --root=<目录>`：全部 SKU 有到手价才生成完整包；`python -X utf8 scripts/verify_batch.py --root=<目录>`：逐行与源缓存独立验收。
@@ -31,11 +32,18 @@ description: 将京东商品链接清单采集为关键词/商品标题命名的
 
 大批量用有界驱动链自动跑完整个授权范围，全部能力来自上面各脚本：
 
-- 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（≥5000）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。
+- 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60，建议 45，单页约 50 次后易报浏览器命令异常）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（下限 50）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`（可降到 500）；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。平台频控/验证一旦出现仍立即停。
 - 恢复入口按停止原因分流：本地传输瞬断 `resume_after_local_recovery.py`；验证/频控走 keeper 冷却；运营者隔离停摆商品后 `resume_after_stall_isolated.py`；另有 platform_cooldown / verification / abrupt_runner / material_recovery / pacing_change 各入口。
 - 同一商品/SKU 连续 3 次瞬态停摆视为确定性商品失败：驱动器自动写入 `errors/` 失败清单（failureType=STALL_原因）并继续整批，不再拦停整个范围；平台级原因（验证、频控、登录）仍然立即停止。
 - `monitor_batch.ps1 -Stage <状态目录> -Minutes N` 做后台轮询监控。
 - 跨批同源商品重建：`prior_receipts.py` 索引旧批回执，同 pid 旧包移入本批备份后按当前数据重建；无法证明归属的同名目录仍然硬失败。
+
+## 吞吐与稳定性
+
+- 任务页整轮复用：一轮一个新标签页，替代「每个商品一个新页」，既有回归测试锁定。
+- 页内批量取价 10 SKU/次；单轮上限 45 次请求可避开单页约 50 次后的浏览器命令异常。
+- 素材 CDN 下载已在进程内固定 IPv4（单图 40 秒 → 0.3 秒）；详情图只有域名/目录的坏链按死链丢弃。
+- 登录态降级会让整批退化成原价兜底，必须做价格复核，流程见 `references/throughput-and-stability.md`。
 
 ## 到手价和顺序
 
