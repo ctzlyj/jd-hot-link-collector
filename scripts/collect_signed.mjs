@@ -74,7 +74,7 @@ try{
    // The document also calls the business interface. Share its throttle with SKU requests.
    await sleep(waitUntilNext(Date.now(),clock(),Math.max(Number(process.env.JD_COLLECTOR_NAV_MIN_MS||'60000'),options.interval)));
    state.products++;state.navigations++;checkpoint({currentProduct:pid,currentSku:pid});
-   const opened=await openNativePage(owner,Page,sendCommandFull,context,pid,taskTab);if(!taskTab)taskTab=opened.tab;current=opened;
+   const opened=await openNativePage(owner,Page,sendCommandFull,context,pid,taskTab);taskTab=opened.tab;current=opened;
    state.requests++;finishRequest();
    if(!opened.result.ok){
     if(opened.result.reason==='PRODUCT_UNAVAILABLE'||opened.result.reason==='PRODUCT_UNAVAILABLE_REDIRECT'){
@@ -89,7 +89,9 @@ try{
    if(options.mainOnly){current=null;continue;}
    let firstSku=true;
    const pending=rows.filter(r=>r.sku!==pid&&shouldRequest({validCache:!!validCache(r.sku),partialCache:partialCache(r.sku),recheckPrices:options.recheckPrices}));
-   const BATCH=10;
+   // 2026-11-01: reduced from 10 to 4 so a worst-case batch (per-SKU 20s deadline)
+   // stays under the 120s browser-command deadline on a slow machine.
+   const BATCH=4;
    for(let i=0;i<pending.length;i+=BATCH){
     if(state.requests>=options.maxRequests){checkpoint({state:'COOLDOWN_REQUIRED'});break}
     const slice=pending.slice(i,i+BATCH);
@@ -108,7 +110,12 @@ try{
     }
     finishRequest();
    }
-   current=null;
+   // 2026-11-01: close the tab at the end of each product. A tab reused across
+   // products can enter a state where batch price evaluates hang until the
+   // 120s command deadline, while a fresh tab always works. One live tab at a
+   // time keeps memory flat; the extra ~1s per product is negligible.
+   if(current){try{await current.page.closeTab(current.tab)}catch{}}
+   current=null;taskTab=null;
    if(state.state==='COOLDOWN_REQUIRED')break;
    }catch(e){
     if(e.message!=='SKU_MATRIX_INVALID')throw e;
@@ -125,7 +132,7 @@ try{
    const remaining=unresolvedPrices(partials,resolved);checkpoint({state:options.mainOnly?'MAIN_SCAN_COMPLETE':remaining.length?'DATA_COLLECTED_PRICE_PENDING':'DATA_COMPLETE',pendingPriceSkus:remaining.map(x=>x.data.responseSku)});
   }
  }
-}catch(e){if(e.message==='ANOTHER_RUNNER_OR_UNRESOLVED_LOCK'){state.state='REFUSED';state.reason=e.message}else if(!e.taskStop){checkpoint({state:'HALTED',reason:e.message==='SKU_MATRIX_INVALID'?e.message:'LOCAL_OR_TRANSPORT_ERROR',errorType:e.name})}process.exitCode=2;}
+}catch(e){if(e.message==='ANOTHER_RUNNER_OR_UNRESOLVED_LOCK'){state.state='REFUSED';state.reason=e.message}else if(!e.taskStop){checkpoint({state:'HALTED',reason:e.message==='SKU_MATRIX_INVALID'?e.message:'LOCAL_OR_TRANSPORT_ERROR',errorType:e.name,errorMessage:String(e.message).slice(0,160)})}process.exitCode=2;}
 finally{
  if(current){try{await current.page.closeTab(current.tab)}catch{checkpoint({cleanupPendingTab:current.tab})}}
  if(taskTab&&(!current||current.tab!==taskTab)){try{await owner.closeTab(taskTab)}catch{}}

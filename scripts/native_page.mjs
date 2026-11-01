@@ -28,7 +28,7 @@ export function capturedBusiness(rows,expectedSku){
  }
  return null;
 }
-export async function waitNativePage(page,sku,{timeoutMs=45000,afterCount=null,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now}={}){
+export async function waitNativePage(page,sku,{timeoutMs=120000,afterCount=null,sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=Date.now}={}){
  const deadline=now()+timeoutMs;
  while(now()<deadline){
   await sleep(1000);const state=decode(await page.evaluate(afterCount!==null?completedRequestState(sku):nativePageState));
@@ -45,7 +45,8 @@ export async function waitNativePage(page,sku,{timeoutMs=45000,afterCount=null,s
  return {ok:false,reason:'INITIAL_RESPONSE_MISSING'};
 }
 export async function openNativePage(owner,Page,sendCommandFull,context,sku,reuseTab){
- const tab=reuseTab||await owner.newTab();const page=new Page(context.session,context.idleTimeout,undefined,'background');page.setActivePage(tab);
+ const attempt=async tab=>{
+ const page=new Page(context.session,context.idleTimeout,undefined,'background');page.setActivePage(tab);
  try{
   const started=await page.startNetworkCapture('pc_detailpage_wareBusiness');
   if(started===false)throw Error('NETWORK_CAPTURE_UNSUPPORTED');
@@ -56,4 +57,12 @@ export async function openNativePage(owner,Page,sendCommandFull,context,sku,reus
   await page.evaluate(`window.__jdNativeRequestContext=${JSON.stringify(result.context)};undefined`);
   return {tab,page,result:{ok:true,data:result.data}};
  }catch(e){try{await page.closeTab(tab)}catch{}throw e}
+ };
+ // 2026-11-01: Chrome memory saver can discard a background task tab under memory pressure,
+ // making its handle stale ("Page not found — stale page identity"). Retry once on a fresh tab.
+ if(reuseTab){
+  try{return await attempt(reuseTab)}
+  catch(e){/* fall through to a fresh tab; the stale one is closed or already discarded */}
+ }
+ return attempt(await owner.newTab());
 }
