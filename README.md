@@ -2,9 +2,23 @@
 
 京东商品链接素材采集 Skill。接口优先：每个源商品加载一次自己的页面上下文，同商品 SKU 使用页面官方 SDK + XHR 读取真实到手价，不逐 SKU 翻页。点击仅作正常页面上的备用。只采集，不上架、不改图。
 
-## 安装与更新
+## 安装
 
-克隆本仓库到当前用户的 `.joycode/skills/jd-hot-link-collector`（已有安装在该目录执行 `git pull --ff-only`），安装 `requirements.txt`。需要本机 Python、Node，以及已连接当前授权浏览器的 WebCLI；浏览器适配器路径由助手核对后写配置，不复制别人的登录资料。
+通过 O2 SkillHub 安装（推荐）：
+
+```bash
+o2 install skill 10730
+```
+
+或让 JoyCode 自动安装：把上面的「采销标准提示词」发给 JoyCode 即可。
+
+安装后运行自检：
+
+```bash
+python -X utf8 scripts/self_check.py
+```
+
+需要本机 Python 3.10+、Node.js 20+，以及已连接当前授权浏览器的 WebCLI；浏览器适配器路径由助手核对后写配置，不复制别人的登录资料。
 
 ## 使用
 

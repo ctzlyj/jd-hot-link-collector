@@ -69,10 +69,10 @@ test('missing prices get one real supplementary pass, never ordinary-price fallb
  assert.equal(run(f,['--recheck-prices']).status,0);s=JSON.parse(fs.readFileSync(path.join(f.stage,'runner_state.json'),'utf8'));assert.equal(s.requests,0);
 });
 
-test('one task tab is reused for the whole round',()=>{
+test('each product gets a fresh tab (Chrome memory-saver resilience)',()=>{
  const f=fixture();const r=run(f);assert.equal(r.status,0,r.stderr);
  const trace=JSON.parse(fs.readFileSync(path.join(f.runtime,'trace.json'),'utf8'));
- assert.equal(trace.filter(x=>x.newTab).length,1,'exactly one task tab per round');
- assert.equal(trace.filter(x=>x.closed).length,1,'the reused tab is closed when the round ends');
- assert.equal(trace.filter(x=>x.navigation).length,2,'both products load in that tab');
+ assert.equal(trace.filter(x=>x.newTab).length,2,'one fresh tab per product');
+ assert.equal(trace.filter(x=>x.closed).length,2,'each tab is closed after its product');
+ assert.equal(trace.filter(x=>x.navigation).length,2,'each product navigates once');
 });

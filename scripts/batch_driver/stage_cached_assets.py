@@ -1,4 +1,4 @@
-﻿"""Download already-collected public material; never query prices or touch login."""
+"""Download already-collected public material; never query prices or touch login."""
 from __future__ import annotations
 import concurrent.futures
 import hashlib
@@ -15,7 +15,7 @@ from collector_guard import atomic_json, ordered_variants
 from jpeg_cache import save_cached_jpeg
 
 import os
-ROOT = Path(os.environ['JD_COLLECTOR_ROOT']).resolve() if os.environ.get('JD_COLLECTOR_ROOT') else Path(r'D:\caotong.888\Desktop\京东链接搬运')
+ROOT = Path(os.environ['JD_COLLECTOR_ROOT']).resolve() if os.environ.get('JD_COLLECTOR_ROOT') else Path.home() / 'Desktop' / '京东链接搬运'
 STAGE = Path(os.environ['JD_COLLECTOR_STATE_DIR']).resolve() if os.environ.get('JD_COLLECTOR_STATE_DIR') else ROOT / '.batch_work4_resume'
 CACHE = STAGE / 'asset_cache'
 

@@ -1,5 +1,5 @@
-﻿﻿param(
-  [string]$Stage = "D:\caotong.888\Desktop\京东链接搬运\.collector_state",
+﻿param(
+  [string]$Stage = $(if($env:JD_COLLECTOR_STATE_DIR){$env:JD_COLLECTOR_STATE_DIR}else{"$env:USERPROFILE\Desktop\京东链接搬运\.collector_state"}),
   [int]$Minutes = 5
 )
 $end = (Get-Date).AddMinutes($Minutes)

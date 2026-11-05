@@ -1,4 +1,12 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
+.pytest_cache/
 .collector_state/
 node_modules/
+*.log
+browser_context.json
+asset_cache/
+video_cache/
+packages/
+receipts/
+partial_data/
