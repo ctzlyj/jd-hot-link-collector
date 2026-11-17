@@ -1,6 +1,7 @@
 """Stage already observed public media. No JD business requests, prices or workbooks."""
 import concurrent.futures,hashlib,json,shutil,sys
 from datetime import datetime,timezone
+from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from collector_guard import atomic_json,ordered_variants
 from stage_cached_assets import ROOT,STAGE,CACHE,image_url,safe_name,save_jpeg,get_public

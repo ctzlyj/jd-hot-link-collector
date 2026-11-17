@@ -27,7 +27,7 @@ def main():
     driver = json.loads(driver_file.read_text(encoding='utf-8-sig'))
     if keeper.get('state') != 'STOP' or keeper.get('childPid'):
         raise RuntimeError('RESUME_STATE_CHANGED')
-    if keeper.get('reason') not in ('BLOCKED_STALL', 'BLOCKED_UNKNOWN', 'BLOCKED_MATERIAL') or driver.get('phase') not in ('BLOCKED_STALL', 'BLOCKED_UNKNOWN', 'BLOCKED_MATERIAL'):
+    if keeper.get('reason') not in ('BLOCKED_STALL', 'BLOCKED_UNKNOWN', 'BLOCKED_MATERIAL', 'BLOCKED_ENVIRONMENT') or driver.get('phase') not in ('BLOCKED_STALL', 'BLOCKED_UNKNOWN', 'BLOCKED_MATERIAL', 'BLOCKED_ENVIRONMENT'):
         raise RuntimeError('RESUME_REASON_NOT_ISOLATABLE_STOP')
     if (stage / 'runner.lock').exists():
         raise RuntimeError('ACTIVE_OR_UNRESOLVED_RUNNER_LOCK')

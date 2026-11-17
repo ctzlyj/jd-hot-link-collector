@@ -14,10 +14,20 @@ def task_paths():
 def read(path):return json.loads(path.read_text(encoding='utf-8-sig'))
 def stamp():return datetime.now(timezone.utc).isoformat()
 
-ROUND_COOLDOWN=int(os.environ.get('JD_BATCH_ROUND_COOLDOWN_SECONDS','120'))
-INTERVAL_MS=os.environ.get('JD_BATCH_INTERVAL_MS','30000')
-FALLBACK=os.environ.get('JD_BATCH_ORIGINAL_PRICE_FALLBACK','')=='1'
-STAGE_EVERY=max(1,int(os.environ.get('JD_BATCH_STAGE_EVERY','1')))
+PACING_KEYS=('JD_BATCH_ROUND_COOLDOWN_SECONDS','JD_BATCH_INTERVAL_MS','JD_BATCH_MAX_REQUESTS','JD_COLLECTOR_MAX_REQUEST_LIMIT','JD_COLLECTOR_MIN_INTERVAL_MS','JD_COLLECTOR_NAV_MIN_MS','JD_BATCH_STAGE_EVERY','JD_BATCH_ORIGINAL_PRICE_FALLBACK')
+PACING_DEFAULTS={'JD_BATCH_ROUND_COOLDOWN_SECONDS':'120','JD_BATCH_INTERVAL_MS':'30000','JD_BATCH_MAX_REQUESTS':'20','JD_COLLECTOR_MAX_REQUEST_LIMIT':'20','JD_COLLECTOR_MIN_INTERVAL_MS':'30000','JD_COLLECTOR_NAV_MIN_MS':'60000','JD_BATCH_STAGE_EVERY':'1','JD_BATCH_ORIGINAL_PRICE_FALLBACK':''}
+def resolve_pacing(stage):
+    """Env values win and are persisted to the stage, so later resumes keep the batch's pacing."""
+    saved={}
+    try: saved=json.loads((Path(stage)/'pacing.json').read_text(encoding='utf-8-sig'))
+    except (OSError,ValueError): pass
+    resolved={k:str(os.environ[k]) if k in os.environ else str(saved.get(k) or PACING_DEFAULTS[k]) for k in PACING_KEYS}
+    # A round size above the collector-side limit would crash the round (INVALID_REQUEST_LIMIT).
+    resolved['JD_COLLECTOR_MAX_REQUEST_LIMIT']=str(max(int(resolved['JD_COLLECTOR_MAX_REQUEST_LIMIT']),int(resolved['JD_BATCH_MAX_REQUESTS'])))
+    if any(k in os.environ for k in PACING_KEYS):
+        try: atomic_state(Path(stage)/'pacing.json',resolved)
+        except OSError: pass
+    return resolved
 def batch_scope(stage):
     import json as _json
     tasks=_json.loads((stage/'keyword_tasks.json').read_text(encoding='utf-8-sig'))
@@ -28,16 +38,18 @@ def batch_done(report,scope):
     counts=report.get('counts') or {}
     return set(counts)=={'VERIFIED','PRODUCT_UNAVAILABLE'}
 
-MAX_REQUESTS=str(int(os.environ.get('JD_BATCH_MAX_REQUESTS','20')))
 def main():
     root,stage,skill=task_paths();file=stage/'batch_driver_state.json'
     previous=read(file) if file.exists() else {}
     work=initial_phase(previous)
-    state={'coverageVersion':2,'phase':work,'workPhase':work,'rounds':previous.get('rounds',0),'startedAt':stamp(),'childPid':None,'stall':previous.get('stall'),'stallCount':previous.get('stallCount',0)}
+    pacing=resolve_pacing(stage)
+    ROUND_COOLDOWN=int(pacing['JD_BATCH_ROUND_COOLDOWN_SECONDS']);INTERVAL_MS=pacing['JD_BATCH_INTERVAL_MS'];MAX_REQUESTS=pacing['JD_BATCH_MAX_REQUESTS']
+    STAGE_EVERY=max(1,int(pacing['JD_BATCH_STAGE_EVERY']));FALLBACK=pacing['JD_BATCH_ORIGINAL_PRICE_FALLBACK']=='1'
+    state={'coverageVersion':2,'phase':work,'workPhase':work,'rounds':previous.get('rounds',0),'startedAt':stamp(),'childPid':None,'stall':previous.get('stall'),'stallCount':previous.get('stallCount',0),'consecutiveIsolations':previous.get('consecutiveIsolations',0)}
     def save(**fields):
         state.update(fields);state['updatedAt']=stamp();atomic_state(file,state)
     def run(command,log,extra=None):
-        env=dict(os.environ);env.update(extra or {})
+        env=dict(os.environ);env.update(pacing);env.update(extra or {})
         with (stage/log).open('a',encoding='utf-8') as out:
             flags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0
             p=subprocess.Popen(command,stdout=out,stderr=out,cwd=str(skill),env=env,creationflags=flags)
@@ -78,14 +90,20 @@ def main():
                     if stall_pid.isdigit():
                         # Three consecutive stalls on the same product/SKU are a deterministic
                         # product failure: isolate it to the failure list and keep the batch running
-                        # instead of stopping the whole authorized scope.
+                        # instead of stopping the whole authorized scope. But isolation must not
+                        # eat a whole batch when the browser environment itself is degraded
+                        # (memory pressure, daemon/extension drops): three isolations in a row
+                        # without a productive round stop for the operator instead.
+                        consecutive=int(state.get('consecutiveIsolations') or 0)+1
+                        if consecutive>=3:
+                            save(phase='BLOCKED_ENVIRONMENT',reason='CONSECUTIVE_PRODUCT_ISOLATIONS',complete=False);break
                         errors=stage/'errors';errors.mkdir(parents=True,exist_ok=True)
                         (errors/(stall_pid+'.json')).write_text(json.dumps({'sku':stall_pid,'reason':'PRODUCT_UNAVAILABLE','evidence':{'failureType':'STALL_'+str(runner.get('reason') or 'UNKNOWN'),'note':'auto-isolated after 3 consecutive stalls on the same product/SKU'}},ensure_ascii=False),encoding='utf-8')
-                        save(stall=None,stallCount=0,isolatedProduct=stall_pid,phase=work);continue
+                        save(stall=None,stallCount=0,consecutiveIsolations=consecutive,isolatedProduct=stall_pid,phase=work);continue
                     save(phase='BLOCKED_STALL');break
                 # Unknown responses have been aborted and read back by the collector.
                 save(phase='COOLING',notBefore=time.time()+ROUND_COOLDOWN);time.sleep(ROUND_COOLDOWN);save(phase=work);continue
-            save(stall=None,stallCount=0)
+            save(stall=None,stallCount=0,consecutiveIsolations=0)
             if status=='COOLDOWN_REQUIRED':
                 ok,report=(True,None) if state['rounds']%STAGE_EVERY else local_finish()
                 if not ok:save(phase='BLOCKED_MATERIAL');break

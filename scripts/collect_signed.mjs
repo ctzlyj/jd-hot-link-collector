@@ -60,7 +60,7 @@ try{
   const {sendCommandFull}=await import(pathToFileURL(path.join(path.dirname(context.wcli.page),'daemon-client.js')).href);
   owner=new Page(context.session,context.idleTimeout,undefined,'background');
   // Close task tabs left behind by an interrupted round so Chrome memory does not grow.
-  try{const stale=await owner.listTabs();for(const t of stale){if(!t||!t.url||!String(t.url).includes('item.jd.com'))continue;if(context.tab&&t.page===context.tab)continue;try{await owner.closeTab(t.page)}catch{}}}catch{}
+  try{const stale=await owner.tabs();for(const t of stale){if(!t||!t.url||!String(t.url).includes('item.jd.com'))continue;if(context.tab&&t.page===context.tab)continue;try{await owner.closeTab(t.page)}catch{}}}catch{}
   const tasks=json(path.join(stage,'keyword_tasks.json'));
   const ids=[...new Set(Object.values(tasks).flat().map(x=>String(x.pid)))];checkpoint({state:'RUNNING',sourceProducts:ids.length});
   for(const pid of ids){

@@ -1,5 +1,5 @@
 ---
-version: "1.0.4"
+version: "1.0.5"
 name: jd-hot-link-collector
 description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
 ---
@@ -51,9 +51,9 @@ python -X utf8 scripts/self_check.py
 
 大批量用有界驱动链自动跑完整个授权范围，全部能力来自上面各脚本：
 
-- 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60，建议 45，单页约 50 次后易报浏览器命令异常）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（下限 50）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`（可降到 500）；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。平台频控/验证一旦出现仍立即停。
-- 恢复入口按停止原因分流：本地传输瞬断 `resume_after_local_recovery.py`；验证/频控走 keeper 冷却；运营者隔离停摆商品后 `resume_after_stall_isolated.py`；另有 platform_cooldown / verification / abrupt_runner / material_recovery / pacing_change 各入口。
-- 同一商品/SKU 连续 3 次瞬态停摆视为确定性商品失败：驱动器自动写入 `errors/` 失败清单（failureType=STALL_原因）并继续整批，不再拦停整个范围；平台级原因（验证、频控、登录）仍然立即停止。
+- 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60，建议 45，单页约 50 次后易报浏览器命令异常）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（下限 50）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`（可降到 500）；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。首次启动的节奏参数会持久化到状态目录 `pacing.json`，断点恢复入口无需重复导出环境变量，不会再回落到慢速默认；环境变量仍可显式覆盖并更新该文件。平台频控/验证一旦出现仍立即停。
+- 恢复入口按停止原因分流：本地传输瞬断 `resume_after_local_recovery.py`；验证/频控走 keeper 冷却；运营者隔离停摆商品后 `resume_after_stall_isolated.py`；环境退化停止（BLOCKED_ENVIRONMENT）修复内存/守护进程后同样用 `resume_after_stall_isolated.py` 继续；另有 platform_cooldown / verification / abrupt_runner / material_recovery / pacing_change 各入口。
+- 同一商品/SKU 连续 3 次瞬态停摆（含本地传输错误、任务页状态漂移）视为确定性商品失败：驱动器自动写入 `errors/` 失败清单（failureType=STALL_原因）并继续整批，不再拦停整个范围；平台级原因（验证、频控、登录）仍然立即停止。护栏：若连续 3 次隔离之间没有任何一轮正常推进（浏览器环境整体退化，如内存不足导致扩展掉线），驱动器停止为 `BLOCKED_ENVIRONMENT` 而不是继续隔离商品，修复环境后由运营者确认继续。
 - `monitor_batch.ps1 -Stage <状态目录> -Minutes N` 做后台轮询监控。
 - 跨批同源商品重建：`prior_receipts.py` 索引旧批回执，同 pid 旧包移入本批备份后按当前数据重建；无法证明归属的同名目录仍然硬失败。
 

@@ -57,6 +57,63 @@ class BatchDriverTests(unittest.TestCase):
         self.assertEqual(state.get('isolatedProduct'),'10235419524374')
         self.assertEqual(state.get('stallCount'),0)
         self.assertEqual(state['_errors'],['10235419524374.json'])
+
+    def test_transport_error_gets_three_strikes_then_isolated_and_batch_continues(self):
+        stall={'state':'HALTED','reason':'LOCAL_OR_TRANSPORT_ERROR','currentProduct':'10173933574798'}
+        state,commands=self.run_case([stall,stall,stall,{'state':'DATA_COMPLETE'}],{'scope':65,'counts':{'VERIFIED':65},'complete':True})
+        self.assertEqual(state['phase'],'DONE');self.assertTrue(state['complete'])
+        self.assertEqual(state.get('isolatedProduct'),'10173933574798')
+        self.assertEqual(state['_errors'],['10173933574798.json'])
+
+    def test_consecutive_isolations_stop_as_environment_failure_before_eating_the_batch(self):
+        def stall(pid):return {'state':'HALTED','reason':'LOCAL_OR_TRANSPORT_ERROR','currentProduct':pid}
+        steps=[stall('1001')]*3+[stall('1002')]*3+[stall('1003')]*3
+        state,commands=self.run_case(steps,{'scope':65,'counts':{'PENDING':65},'complete':False})
+        self.assertEqual(state['phase'],'BLOCKED_ENVIRONMENT')
+        self.assertEqual(state.get('reason'),'CONSECUTIVE_PRODUCT_ISOLATIONS')
+        self.assertEqual(state['_errors'],['1001.json','1002.json'],'the third product is not isolated when the environment itself is degraded')
+        self.assertEqual(len(commands),9)
+
+    def test_isolation_guard_resets_after_any_productive_round(self):
+        def stall(pid):return {'state':'HALTED','reason':'REQUEST_RESULT_UNKNOWN','currentProduct':pid}
+        steps=[stall('1001')]*3+[{'state':'COOLDOWN_REQUIRED','currentProduct':'1002'}]+[stall('1002')]*3+[{'state':'DATA_COMPLETE'}]
+        state,commands=self.run_case(steps,{'scope':65,'counts':{'VERIFIED':65},'complete':True})
+        self.assertEqual(state['phase'],'DONE');self.assertTrue(state['complete'])
+        self.assertEqual(state['_errors'],['1001.json','1002.json'])
+        self.assertEqual(state.get('consecutiveIsolations'),0)
+
+    def test_env_pacing_persists_to_stage_and_survives_resume_without_env(self):
+        import os
+        keys=['JD_BATCH_MAX_REQUESTS','JD_COLLECTOR_MAX_REQUEST_LIMIT','JD_BATCH_INTERVAL_MS','JD_COLLECTOR_MIN_INTERVAL_MS','JD_COLLECTOR_NAV_MIN_MS','JD_BATCH_ROUND_COOLDOWN_SECONDS','JD_BATCH_STAGE_EVERY','JD_BATCH_ORIGINAL_PRICE_FALLBACK']
+        fast={'JD_BATCH_MAX_REQUESTS':'45','JD_COLLECTOR_MAX_REQUEST_LIMIT':'45','JD_BATCH_INTERVAL_MS':'50','JD_COLLECTOR_MIN_INTERVAL_MS':'50','JD_COLLECTOR_NAV_MIN_MS':'500','JD_BATCH_ROUND_COOLDOWN_SECONDS':'30','JD_BATCH_STAGE_EVERY':'4','JD_BATCH_ORIGINAL_PRICE_FALLBACK':'1'}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);stage=root/'state';stage.mkdir();skill=root/'skill';skill.mkdir()
+            (stage/'keyword_tasks.json').write_text(json.dumps({'kw':[{'pid':'1001','row':1}]}),encoding='utf-8')
+            commands=[]
+            class FakeProcess:
+                pid=987654
+                def __init__(self,command,**kwargs):commands.append(command)
+                def wait(self):
+                    if self.command[0]=='node':
+                        (stage/'runner_state.json').write_text(json.dumps({'state':'DATA_COMPLETE','startedAt':'run-'+str(len(commands))}),encoding='utf-8')
+                        return 0
+                    if Path(self.command[-1]).name in ('verify_batch.py','verify_batch_fallback.py'):
+                        (stage/'independent_validation.json').write_text(json.dumps({'scope':1,'counts':{'VERIFIED':1},'complete':True}),encoding='utf-8')
+                    return 0
+            with patch.object(batch_driver,'task_paths',return_value=(root,stage,skill)),patch.object(batch_driver.subprocess,'Popen',FakeProcess),patch.object(batch_driver.time,'sleep'),contextlib.redirect_stdout(io.StringIO()):
+                with patch.dict(batch_driver.os.environ,fast):
+                    batch_driver.main()
+                first=[c for c in commands if c[0]=='node'][-1]
+                saved={k:os.environ.pop(k,None) for k in keys if k in os.environ}
+                try:
+                    commands.clear();batch_driver.main()
+                finally:
+                    os.environ.update({k:v for k,v in saved.items() if v is not None})
+            second=[c for c in commands if c[0]=='node'][-1]
+            self.assertIn('--max-requests=45',first);self.assertIn('--interval-ms=50',first)
+            self.assertIn('--max-requests=45',second);self.assertIn('--interval-ms=50',second)
+            pacing=json.loads((stage/'pacing.json').read_text(encoding='utf-8-sig'))
+            self.assertEqual(pacing['JD_BATCH_MAX_REQUESTS'],'45');self.assertEqual(pacing['JD_COLLECTOR_MIN_INTERVAL_MS'],'50')
     def test_missing_price_requires_real_supplement_and_is_not_completion(self):
         state,commands=self.run_case([{'state':'MAIN_SCAN_COMPLETE'},{'state':'DATA_COLLECTED_PRICE_PENDING'},{'state':'DATA_COLLECTED_PRICE_PENDING'}],{'scope':154,'counts':{'VERIFIED':8,'ARRIVAL_PRICE_PENDING':146},'complete':False})
         self.assertEqual(state['phase'],'AWAITING_PRICE_DECISION');self.assertFalse(state['complete'])
