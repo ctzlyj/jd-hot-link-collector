@@ -4,7 +4,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from PIL import Image
 from collector_guard import ordered_variants,atomic_json
-from package_live import ROOT,STAGE,live_data,verify_table
+from package_live import ROOT,STAGE,live_data,verify_table,active_variants
 from package_contract import table_matrix,error_state
 from media_guard import inspect_mp4
 from checkpoint_status import pending_checkpoint_status
@@ -22,7 +22,7 @@ def run():
    try:
     main=live_data(sku)
     if not main:raise ValueError('SOURCE_LIVE_DATA_MISSING')
-    rows=ordered_variants(sku,main['colorSize']);prices={v['sku']:live_data(v['sku']) for v in rows}
+    rows=active_variants(STAGE,ordered_variants(sku,main['colorSize']));prices={v['sku']:live_data(v['sku']) for v in rows}
     if any(v is None for v in prices.values()):raise ValueError('SKU_PRICE_EVIDENCE_MISSING')
     detail_cache=STAGE/'details_ordered'/(str(main['realSpuId'])+'.json')
     if not detail_cache.is_file():raise ValueError('DETAIL_SOURCE_CACHE_MISSING')

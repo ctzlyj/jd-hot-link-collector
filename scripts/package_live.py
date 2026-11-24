@@ -12,6 +12,14 @@ SCRIPT=Path(__file__).parent
 
 def load(path):return json.loads(path.read_text(encoding='utf-8-sig'))
 
+def active_variants(stage,rows):
+    """Variants the platform reports as unavailable (delisted) carry no price or
+    image and stay out of the package instead of blocking it forever."""
+    def unavailable(sku):
+        try:return load(Path(stage)/'errors'/f'{sku}.json').get('reason')=='PRODUCT_UNAVAILABLE'
+        except (OSError,ValueError):return False
+    return [r for r in rows if not unavailable(r['sku'])]
+
 def fallback_marker(stage=STAGE):
     """Batch-scoped user authorization for original-price fallback, or None."""
     p=Path(stage)/'price_fallback.json'
@@ -80,7 +88,8 @@ def plan_product(keyword,item,known_names):
     if not main:
         if error.exists():return {'pid':pid,'keyword':keyword,'state':error_state(load(error)),'reason':load(error).get('evidence',{}).get('itemOverTip') or load(error).get('reason')}
         return {'pid':pid,'keyword':keyword,'state':'MAIN_OR_PRICE_PENDING'}
-    rows=ordered_variants(pid,main['colorSize']);prices={r['sku']:live_data(r['sku']) for r in rows}
+    rows=active_variants(STAGE,ordered_variants(pid,main['colorSize']))
+    prices={r['sku']:live_data(r['sku']) for r in rows}
     missing=[k for k,v in prices.items() if v is None]
     if missing:return {'pid':pid,'keyword':keyword,'state':'SKU_PRICES_PENDING','missingSku':missing}
     title=safe_name(main['title']);key=(keyword,title)

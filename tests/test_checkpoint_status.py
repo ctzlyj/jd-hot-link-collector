@@ -47,6 +47,19 @@ class CheckpointStatusTests(unittest.TestCase):
         self.assertEqual(r['missingPriceSkus'], ['2'])
         self.assertEqual(r['knownSkuCount'], 2)
 
+    def test_delisted_variant_does_not_keep_its_product_pending(self):
+        d = self.main(price='5')
+        d['colorSize'] = [{'dim': 1, 'buttons': [
+            {'no': 1, 'text': 'A', 'skuId': '1', 'skuList': ['1']},
+            {'no': 2, 'text': 'B', 'skuId': '2', 'skuList': ['2']}]}]
+        self.save('data', '1', d)
+        p = self.stage / 'errors' / '2.json'
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({'sku': '2', 'reason': 'PRODUCT_UNAVAILABLE'}), encoding='utf-8')
+        r = pending_checkpoint_status(self.stage, '1')
+        self.assertEqual(r['state'], 'PACKAGING_PENDING')
+        self.assertEqual(r['missingPriceSkus'], [])
+
     def test_prices_without_receipt_are_not_verified(self):
         self.save('data', '1', self.main(price='5'))
         self.assertEqual(pending_checkpoint_status(self.stage, '1')['state'], 'PACKAGING_PENDING')

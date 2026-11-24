@@ -13,6 +13,14 @@ class FallbackTests(unittest.TestCase):
         stage=Path(tmp.name); d=stage/'partial_data'; d.mkdir(parents=True)
         (d/f'{sku}.json').write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
         return stage
+
+    def test_delisted_variants_are_dropped_from_the_package_plan(self):
+        tmp=tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        stage=Path(tmp.name); (stage/'errors').mkdir()
+        (stage/'errors'/'2.json').write_text(json.dumps({'sku':'2','reason':'PRODUCT_UNAVAILABLE'}),encoding='utf-8')
+        rows=[{'sku':'1','spec1':'A','image':'jfs/a.jpg'},{'sku':'2','spec1':'B','image':'jfs/b.jpg'}]
+        self.assertEqual([r['sku'] for r in pl.active_variants(stage,rows)],['1'])
+
     def test_partial_price_stays_pending_without_authorization(self):
         sku='10000000000001'; stage=self.stage_with(sku,partial(sku))
         self.assertIsNone(pl.live_data(sku,stage=stage))

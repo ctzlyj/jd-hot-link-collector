@@ -41,7 +41,11 @@ def pending_checkpoint_status(stage, sku):
         rows = ordered_variants(sku, main.get('colorSize') or [])
     except (RuntimeError, TypeError, ValueError, KeyError):
         return {'state': 'CHECKPOINT_INVALID', 'skuMatrixKnown': False}
-    missing = [r['sku'] for r in rows if _snapshot(stage, r['sku'], True) is None]
+    # A variant the platform itself reports as unavailable (delisted) cannot have a
+    # price and must not keep its product pending forever.
+    missing = [r['sku'] for r in rows
+               if _snapshot(stage, r['sku'], True) is None
+               and _read(stage / 'errors' / (str(r['sku']) + '.json')).get('reason') != 'PRODUCT_UNAVAILABLE']
     return {'state': 'PRICE_PENDING' if missing else 'PACKAGING_PENDING',
             'skuMatrixKnown': True, 'knownSkuCount': len(rows),
             'missingPriceSkus': missing}
