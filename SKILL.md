@@ -1,5 +1,5 @@
 ---
-version: "1.0.9"
+version: "1.0.10"
 name: jd-hot-link-collector
 description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
 ---
@@ -70,6 +70,16 @@ python -X utf8 scripts/self_check.py
 - 速度：页面内批量签名查询约 0.25 秒/商品，3 个并行页约 800 商品/分钟；5 个并行页会出现浏览器命令丢失，保持 3 个。
 - 空店返回 0 个商品，计 0；`missing` 非空时该店 skuCount 为已取到部分之和，需重跑补齐。
 - 黄金眼「店铺明细（新）」的 OnSkuNum 是同一口径的内部权威值，但受部门授权限制；本脚本适用于无该部门权限的店铺。
+
+## 素材库批量采集（scripts/collect_materials.mjs）
+
+只采主图/详情图/SKU图，不取价；整批复用**同一个标签页**，避免每商品开关页占用内存。
+
+- 用法：`node scripts/collect_materials.mjs --state-dir <含 browser_context.json 的状态目录> --ids-file <ids.json> --output <materials.jsonl> [--batch 20] [--interval-ms 100]`
+- `ids` 文件支持 JSON 数组、`{类目:[id]}` 对象或每行一个 ID；输出 JSONL 每行一个商品（title/spu/crumbs/carousel/colorSize/videos），可断点续跑。
+- 机制：打开一个商品页拿到原生签名上下文，页内批量调用 `pc_detailpage_wareBusiness`（默认 20 个/批），整批只用一个标签页，结束统一关闭；单个失败记录 reason 继续，平台验证/频控立即停。
+- 实测：902 个商品元数据约 3.5 分钟（约 4 条/秒），全程 1 个标签页。
+- 主图下载必须用 `n12`（800×800 无水印）；`n0` 带 `JD.COM` 水印，不要用于素材库。
 
 ## 吞吐与稳定性
 
