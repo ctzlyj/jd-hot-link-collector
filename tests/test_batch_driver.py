@@ -34,6 +34,7 @@ class BatchDriverTests(unittest.TestCase):
                 batch_driver.main()
             state=json.loads((stage/'batch_driver_state.json').read_text(encoding='utf-8'))
             state['_errors']=sorted(x.name for x in (stage/'errors').glob('*.json')) if (stage/'errors').is_dir() else []
+            state['_error_evidence']={x.name:(json.loads(x.read_text(encoding='utf-8')).get('evidence') or {}) for x in (stage/'errors').glob('*.json')} if (stage/'errors').is_dir() else {}
             self.assertFalse(remaining,'Not all intended phases executed')
             return state,commands if all_commands else [c for c in commands if c[0]=='node']
 
@@ -57,6 +58,23 @@ class BatchDriverTests(unittest.TestCase):
         self.assertEqual(state.get('isolatedProduct'),'10235419524374')
         self.assertEqual(state.get('stallCount'),0)
         self.assertEqual(state['_errors'],['10235419524374.json'])
+
+    def test_main_images_missing_three_strikes_is_isolated_not_a_batch_stop(self):
+        stall={'state':'HALTED','reason':'MAIN_IMAGES_MISSING','currentProduct':'1004'}
+        state,commands=self.run_case([stall]*3+[{'state':'DATA_COMPLETE'}],{'scope':65,'counts':{'VERIFIED':65},'complete':True})
+        self.assertEqual(state['phase'],'DONE');self.assertTrue(state['complete'])
+        self.assertEqual(state['_errors'],['1004.json'])
+        self.assertEqual(state['_error_evidence']['1004.json']['failureType'],'STALL_MAIN_IMAGES_MISSING')
+        self.assertEqual(state.get('consecutiveIsolations'),0)
+
+    def test_page_state_stalls_use_the_short_cooldown_and_keep_isolation_limits(self):
+        from driver_policy import stall_cooldown_seconds,PRODUCT_PAGE_STATE_REASONS
+        self.assertIn('MAIN_IMAGES_MISSING',PRODUCT_PAGE_STATE_REASONS)
+        self.assertNotIn('MAIN_IMAGES_MISSING',__import__('driver_policy').TRANSIENT_REASONS)
+        self.assertEqual(stall_cooldown_seconds('MAIN_IMAGES_MISSING',120,5),5)
+        self.assertEqual(stall_cooldown_seconds('MAIN_IMAGES_MISSING',30,0),0)
+        self.assertEqual(stall_cooldown_seconds('REQUEST_TIMEOUT',120,5),120)
+        self.assertEqual(stall_cooldown_seconds(None,120,5),120)
 
     def test_transport_error_gets_three_strikes_then_isolated_and_batch_continues(self):
         stall={'state':'HALTED','reason':'LOCAL_OR_TRANSPORT_ERROR','currentProduct':'10173933574798'}

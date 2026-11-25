@@ -1,5 +1,5 @@
 ---
-version: "1.0.7"
+version: "1.0.8"
 name: jd-hot-link-collector
 description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
 ---
@@ -54,6 +54,7 @@ python -X utf8 scripts/self_check.py
 - 启动：`JD_BATCH_STATE_DIR=<状态目录> python -X utf8 scripts/batch_driver/start_new_batch.py`。速度环境变量：`JD_BATCH_MAX_REQUESTS`（≤60，建议 45，单页约 50 次后易报浏览器命令异常）、`JD_BATCH_INTERVAL_MS`/`JD_COLLECTOR_MIN_INTERVAL_MS`（下限 50）、`JD_BATCH_ROUND_COOLDOWN_SECONDS`、`JD_COLLECTOR_NAV_MIN_MS`（可降到 500）；`JD_BATCH_ORIGINAL_PRICE_FALLBACK=1` 打开打包/验收的原价兜底链，`JD_BATCH_STAGE_EVERY` 控制中途打包频率。首次启动的节奏参数会持久化到状态目录 `pacing.json`，断点恢复入口无需重复导出环境变量，不会再回落到慢速默认；环境变量仍可显式覆盖并更新该文件。平台频控/验证一旦出现仍立即停。
 - 恢复入口按停止原因分流：本地传输瞬断 `resume_after_local_recovery.py`；验证/频控走 keeper 冷却；运营者隔离停摆商品后 `resume_after_stall_isolated.py`；环境退化停止（BLOCKED_ENVIRONMENT）修复内存/守护进程后同样用 `resume_after_stall_isolated.py` 继续；另有 platform_cooldown / verification / abrupt_runner / material_recovery / pacing_change 各入口。
 - 同一商品/SKU 连续 3 次瞬态停摆（含本地传输错误、任务页状态漂移）视为确定性商品失败：驱动器自动写入 `errors/` 失败清单（failureType=STALL_原因）并继续整批，不再拦停整个范围；平台级原因（验证、频控、登录）仍然立即停止。护栏：若连续 3 次隔离之间没有任何一轮正常推进（浏览器环境整体退化，如内存不足导致扩展掉线），驱动器停止为 `BLOCKED_ENVIRONMENT` 而不是继续隔离商品，修复环境后由运营者确认继续。
+- 页面状态类失败（如 `MAIN_IMAGES_MISSING`）同样走三振隔离：实测多为瞬态、直连重试可过，所以用短冷却（`JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS`，默认 5 秒，持久化进 `pacing.json`）快速重试；同一商品连续 3 次仍失败才隔离进失败清单，不再拦停整批。
 - `monitor_batch.ps1 -Stage <状态目录> -Minutes N` 做后台轮询监控。
 - 跨批同源商品重建：`prior_receipts.py` 索引旧批回执，同 pid 旧包移入本批备份后按当前数据重建；无法证明归属的同名目录仍然硬失败。
 
@@ -61,8 +62,10 @@ python -X utf8 scripts/self_check.py
 
 按店铺维度统计在售 SKU 数：店铺前台分页取全部商品，再逐个商品取原生 SKU 矩阵求和。用于运营表「在售SKU」列补齐、店铺选品评估；不采集价格与素材。
 
-- 用法：`node scripts/shop_sku_count.mjs --state-dir <含 browser_context.json 的状态目录> --shops "60407178,230456174" --output <结果.json> [--workers 3] [--chunk 60]`
+- 单店直跑：`node scripts/shop_sku_count.mjs --state-dir <含 browser_context.json 的状态目录> --shops "60407178,230456174" --output <结果.json> [--workers 3] [--chunk 60]`
+- 表格驱动（推荐）：`python -X utf8 scripts/batch_driver/shop_sku_driver.py --input <运营表.xlsx> --state-dir <状态目录>`。自动读表格「店铺」列（店铺 ID 或店铺主页链接；纯店铺名无法解析的写入 `shop_table_audit.json`，不猜测），分批调用采集脚本断点续跑，完成后输出 `<表名>_SKU结果_日期.xlsx` 副本并追加「在售SKU数/在售商品数/待补商品数/店铺采集时间」列；原表永不修改。平台原因（验证/频控/登录）立即停为 `BLOCKED_PLATFORM`；同一块连续失败 3 次停为 `BLOCKED_UNKNOWN` 留待人工检查。
 - 结果 JSON：每店 `productCount` / `skuCount` / `missing`（未取到 SKU 数的商品），按商品增量落盘，中断后同参数重跑即断点续跑。
+- 前台分页上限：翻页耗尽仍少于接口返回总数时标记 `pagingCapExceeded`，并按响应中的分类列表逐分类分片枚举（`shards` 记录每分类商品数、`shardDuplicates` 记录跨片重复），合并去重后仍不足才置 `incomplete=true`；响应无分类可用时记 `note=PAGING_CAP_EXCEEDED`，绝不静默低估。
 - 机制与实测（2026-11-25，31 个厨具店、21,621 个商品）：店铺页本身没有 PSign SDK，`whx_searchWare` 必须从 `item.jd.com` 商品页上下文签名调用；`pageSize` 上限 30（更大返回「pageSize过大！」）；前台显示封顶 1000 个商品，但分页接口返回真实总数（实测 1058/1481 等）；单商品 SKU 数取 `colorSizeVO` 矩阵按钮数（单 SKU 商品计 1）。
 - 速度：页面内批量签名查询约 0.25 秒/商品，3 个并行页约 800 商品/分钟；5 个并行页会出现浏览器命令丢失，保持 3 个。
 - 空店返回 0 个商品，计 0；`missing` 非空时该店 skuCount 为已取到部分之和，需重跑补齐。
@@ -73,6 +76,7 @@ python -X utf8 scripts/self_check.py
 - 任务页整轮复用：一轮一个新标签页，替代「每个商品一个新页」，既有回归测试锁定。
 - 页内批量取价 10 SKU/次；单轮上限 45 次请求可避开单页约 50 次后的浏览器命令异常。
 - 素材 CDN 下载已在进程内固定 IPv4（单图 40 秒 → 0.3 秒）；详情图只有域名/目录的坏链按死链丢弃。
+- 主图尺寸变体损坏时自动换同图床 `/n0/` 标准变体重试一次，替换记录写入打包回执与暂存 manifest 的 `sourceNotes`（originalUrl/variantUrl/原因）；无变体或变体也失败仍按坏链处理，不跨图床、不静默换图。
 - 登录态降级会让整批退化成原价兜底，必须做价格复核，流程见 `references/throughput-and-stability.md`。
 
 ## 到手价和顺序

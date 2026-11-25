@@ -3,7 +3,7 @@ Platform refusals stop this run; completion requires independent package verific
 import json,os,subprocess,sys,time
 from pathlib import Path
 from datetime import datetime,timezone
-from driver_policy import initial_phase,stall_state,HUMAN_REASONS,REFUSED_REASONS,TRANSIENT_REASONS
+from driver_policy import initial_phase,stall_state,HUMAN_REASONS,REFUSED_REASONS,TRANSIENT_REASONS,PRODUCT_PAGE_STATE_REASONS,stall_cooldown_seconds
 from checkpoint_io import atomic_state
 
 def task_paths():
@@ -14,8 +14,8 @@ def task_paths():
 def read(path):return json.loads(path.read_text(encoding='utf-8-sig'))
 def stamp():return datetime.now(timezone.utc).isoformat()
 
-PACING_KEYS=('JD_BATCH_ROUND_COOLDOWN_SECONDS','JD_BATCH_INTERVAL_MS','JD_BATCH_MAX_REQUESTS','JD_COLLECTOR_MAX_REQUEST_LIMIT','JD_COLLECTOR_MIN_INTERVAL_MS','JD_COLLECTOR_NAV_MIN_MS','JD_BATCH_STAGE_EVERY','JD_BATCH_ORIGINAL_PRICE_FALLBACK')
-PACING_DEFAULTS={'JD_BATCH_ROUND_COOLDOWN_SECONDS':'120','JD_BATCH_INTERVAL_MS':'30000','JD_BATCH_MAX_REQUESTS':'20','JD_COLLECTOR_MAX_REQUEST_LIMIT':'20','JD_COLLECTOR_MIN_INTERVAL_MS':'30000','JD_COLLECTOR_NAV_MIN_MS':'60000','JD_BATCH_STAGE_EVERY':'1','JD_BATCH_ORIGINAL_PRICE_FALLBACK':''}
+PACING_KEYS=('JD_BATCH_ROUND_COOLDOWN_SECONDS','JD_BATCH_INTERVAL_MS','JD_BATCH_MAX_REQUESTS','JD_COLLECTOR_MAX_REQUEST_LIMIT','JD_COLLECTOR_MIN_INTERVAL_MS','JD_COLLECTOR_NAV_MIN_MS','JD_BATCH_STAGE_EVERY','JD_BATCH_ORIGINAL_PRICE_FALLBACK','JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS')
+PACING_DEFAULTS={'JD_BATCH_ROUND_COOLDOWN_SECONDS':'120','JD_BATCH_INTERVAL_MS':'30000','JD_BATCH_MAX_REQUESTS':'20','JD_COLLECTOR_MAX_REQUEST_LIMIT':'20','JD_COLLECTOR_MIN_INTERVAL_MS':'30000','JD_COLLECTOR_NAV_MIN_MS':'60000','JD_BATCH_STAGE_EVERY':'1','JD_BATCH_ORIGINAL_PRICE_FALLBACK':'','JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS':'5'}
 def resolve_pacing(stage):
     """Env values win and are persisted to the stage, so later resumes keep the batch's pacing."""
     saved={}
@@ -45,6 +45,7 @@ def main():
     pacing=resolve_pacing(stage)
     ROUND_COOLDOWN=int(pacing['JD_BATCH_ROUND_COOLDOWN_SECONDS']);INTERVAL_MS=pacing['JD_BATCH_INTERVAL_MS'];MAX_REQUESTS=pacing['JD_BATCH_MAX_REQUESTS']
     STAGE_EVERY=max(1,int(pacing['JD_BATCH_STAGE_EVERY']));FALLBACK=pacing['JD_BATCH_ORIGINAL_PRICE_FALLBACK']=='1'
+    PAGE_STATE_COOLDOWN=pacing['JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS']
     state={'coverageVersion':2,'phase':work,'workPhase':work,'rounds':previous.get('rounds',0),'startedAt':stamp(),'childPid':None,'stall':previous.get('stall'),'stallCount':previous.get('stallCount',0),'consecutiveIsolations':previous.get('consecutiveIsolations',0)}
     def save(**fields):
         state.update(fields);state['updatedAt']=stamp();atomic_state(file,state)
@@ -82,7 +83,7 @@ def main():
                 save(phase='BLOCKED_PLATFORM',platformReason=reason);local_finish();break
             if reason=='ANOTHER_RUNNER_OR_UNRESOLVED_LOCK' or status=='REFUSED':save(phase='BLOCKED_LOCK');break
             if status=='HALTED':
-                if reason not in TRANSIENT_REASONS:save(phase='BLOCKED_UNKNOWN',reason=reason);local_finish();break
+                if reason not in TRANSIENT_REASONS and reason not in PRODUCT_PAGE_STATE_REASONS:save(phase='BLOCKED_UNKNOWN',reason=reason);local_finish();break
                 key=[runner.get('currentProduct'),runner.get('currentSku'),reason]
                 save(**stall_state(state,key));local_finish()
                 if state['stallCount']>=3:
@@ -102,7 +103,10 @@ def main():
                         save(stall=None,stallCount=0,consecutiveIsolations=consecutive,isolatedProduct=stall_pid,phase=work);continue
                     save(phase='BLOCKED_STALL');break
                 # Unknown responses have been aborted and read back by the collector.
-                save(phase='COOLING',notBefore=time.time()+ROUND_COOLDOWN);time.sleep(ROUND_COOLDOWN);save(phase=work);continue
+                # Page-state stalls retry quickly so one product cannot hold the batch
+                # hostage for a full round cooldown; they still count toward isolation.
+                cooldown=stall_cooldown_seconds(reason,ROUND_COOLDOWN,PAGE_STATE_COOLDOWN)
+                save(phase='COOLING',notBefore=time.time()+cooldown);time.sleep(cooldown);save(phase=work);continue
             save(stall=None,stallCount=0,consecutiveIsolations=0)
             if status=='COOLDOWN_REQUIRED':
                 ok,report=(True,None) if state['rounds']%STAGE_EVERY else local_finish()

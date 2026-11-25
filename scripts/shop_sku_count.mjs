@@ -15,6 +15,27 @@ export function countMatrixSkus(colorSize) {
   return n || 1;
 }
 
+/** The storefront front end only exposes a bounded number of pages per query. */
+export const SHOP_PAGE_LIMIT = 80;
+/** Field names the storefront API has been observed to use for its category list. */
+export const CATEGORY_KEYS = ['cateList', 'categoryList', 'catList', 'shopCategoryList', 'cateInfoList'];
+/** Body field used to restrict a storefront query to one category shard. */
+export const SHARD_BODY_FIELD = 'catId';
+
+/** Category shards advertised by a shop page response (id + name), if any. */
+export function extractCategories(json) {
+  const result = json?.result ?? json;
+  for (const key of CATEGORY_KEYS) {
+    const list = result?.[key];
+    if (!Array.isArray(list) || !list.length) continue;
+    const cats = list.map((c) => ({id: String(c.catId ?? c.categoryId ?? c.id ?? ''),
+                                   name: String(c.name || c.cateName || '')}))
+                     .filter((c) => /^\d+$/.test(c.id));
+    if (cats.length) return cats;
+  }
+  return [];
+}
+
 /** Parse one whx_searchWare response body into the product ids of that page. */
 export function parseShopPage(text) {
   let json = null;
@@ -26,7 +47,47 @@ export function parseShopPage(text) {
     total: Number(result.totalCount) || 0,
     shopName: result.shopName || '',
     ids: (result.wareInfo || []).map((w) => String(w.wareId)),
+    categories: extractCategories(json),
   };
+}
+
+/** Merge shard ids after the base list, keeping first-seen order and auditing duplicates. */
+export function mergeShardIds(baseIds, shardIds) {
+  const seen = new Set((baseIds || []).map(String));
+  const ids = [...seen];
+  const duplicates = [];
+  for (const id of (shardIds || []).map(String)) {
+    if (seen.has(id)) { duplicates.push(id); continue; }
+    seen.add(id); ids.push(id);
+  }
+  return {ids, duplicates};
+}
+
+/** Pure summary of one shop enumeration: honest cap flags and shard bookkeeping. */
+export function shopEnumerationSummary(base, shardRuns) {
+  if (base.note) {
+    return {ids: base.ids, total: base.total, note: base.note, pagingCapExceeded: false,
+            incomplete: false, shards: null, shardDuplicates: 0};
+  }
+  const cap = Number(base.total || 0) > (base.ids || []).length;
+  if (!cap) {
+    return {ids: base.ids, total: base.total, note: null, pagingCapExceeded: false,
+            incomplete: false, shards: null, shardDuplicates: 0};
+  }
+  if (!(base.categories || []).length) {
+    return {ids: base.ids, total: base.total, note: 'PAGING_CAP_EXCEEDED', pagingCapExceeded: true,
+            incomplete: true, shards: null, shardDuplicates: 0};
+  }
+  const shards = {};
+  const shardIds = [];
+  for (const run of shardRuns || []) {
+    shards[run.id] = run.note ? {note: run.note} : {products: run.ids.length, total: run.total};
+    if (!run.note) shardIds.push(...run.ids);
+  }
+  const merged = mergeShardIds(base.ids, shardIds);
+  return {ids: merged.ids, total: base.total, note: null, pagingCapExceeded: true,
+          incomplete: merged.ids.length < Number(base.total || 0), shards,
+          shardDuplicates: merged.duplicates.length};
 }
 
 export function chunk(list, size) {
@@ -36,8 +97,10 @@ export function chunk(list, size) {
 }
 
 const SIGN_EXPRESSION = `
-window.__shopPage = async function(shopId, pageIdx, pageSize){
-  const body=JSON.stringify({shopId,mtest:"",pvid:"",pageIdx,pageSize,sourceRpc:"shop_app_home_bottom",queryKey:"",queryMessage:"",markTag:"1",searchType:"3",pageId:"Shop_NavigationProductsList"});
+window.__shopPage = async function(shopId, pageIdx, pageSize, catId){
+  const payload={shopId,mtest:"",pvid:"",pageIdx,pageSize,sourceRpc:"shop_app_home_bottom",queryKey:"",queryMessage:"",markTag:"1",searchType:"3",pageId:"Shop_NavigationProductsList"};
+  if(catId)payload.catId=String(catId);
+  const body=JSON.stringify(payload);
   const t=Date.now();
   const signed=await window.PSign.sign({appid:"mall_jd_com",clientVersion:"11.0.0",client:"pc",t,body:window.SHA256(body),functionId:"whx_searchWare"});
   const params=new URLSearchParams();
@@ -125,26 +188,50 @@ async function main() {
       const rec = state.shops[shopId] || {ids: null, results: {}, done: false};
       state.shops[shopId] = rec;
       if (rec.ids && rec.ids.length) continue;
-      const ids = [];
-      let total = null;
-      let pageIdx = 1;
-      while (pageIdx <= 80) {
-        const text = await sign.page.evaluate(`window.__shopPage(${JSON.stringify(shopId)},${pageIdx},${SHOP_PAGE_SIZE})`);
-        const parsed = parseShopPage(text);
-        if (!parsed.ok) { rec.note = parsed.reason; break; }
-        total = parsed.total;
-        if (parsed.shopName) rec.name = parsed.shopName;
-        if (!parsed.ids.length) break;
-        ids.push(...parsed.ids);
-        if (ids.length >= total) break;
-        pageIdx++;
-        await new Promise((r) => setTimeout(r, 150));
+      const enumerate = async (catId) => {
+        const ids = [];
+        let total = 0;
+        let note = null;
+        let categories = [];
+        let pageIdx = 1;
+        while (pageIdx <= SHOP_PAGE_LIMIT) {
+          const args = [JSON.stringify(shopId), pageIdx, SHOP_PAGE_SIZE];
+          if (catId) args.push(JSON.stringify(String(catId)));
+          const text = await sign.page.evaluate(`window.__shopPage(${args.join(',')})`);
+          const parsed = parseShopPage(text);
+          if (!parsed.ok) { note = parsed.reason; break; }
+          total = parsed.total;
+          if (parsed.shopName) rec.name = parsed.shopName;
+          if (pageIdx === 1) categories = parsed.categories || [];
+          if (!parsed.ids.length) break;
+          ids.push(...parsed.ids);
+          if (ids.length >= total) break;
+          pageIdx++;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        return {ids, total, note, categories};
+      };
+      const base = await enumerate(null);
+      let shardRuns = [];
+      if (!base.note && Number(base.total || 0) > base.ids.length && base.categories.length) {
+        // The front end caps paging; per-category shards enumerate the long tail.
+        for (const cat of base.categories) {
+          const run = await enumerate(cat.id);
+          shardRuns.push({id: cat.id, ids: run.ids, note: run.note, total: run.total});
+        }
       }
-      rec.ids = ids;
-      rec.productTotal = total;
-      rec.note = rec.note || (ids.length ? undefined : 'EMPTY_SHOP');
+      const summary = shopEnumerationSummary(base, shardRuns);
+      rec.ids = summary.ids;
+      rec.productTotal = summary.total;
+      rec.note = summary.note || (summary.ids.length ? undefined : 'EMPTY_SHOP');
+      rec.pagingCapExceeded = summary.pagingCapExceeded || undefined;
+      rec.incomplete = summary.incomplete || undefined;
+      if (summary.shards) rec.shards = summary.shards;
+      if (summary.shardDuplicates) rec.shardDuplicates = summary.shardDuplicates;
       save();
-      console.log(JSON.stringify({shopId, name: rec.name || '', products: ids.length, total}));
+      console.log(JSON.stringify({shopId, name: rec.name || '', products: summary.ids.length,
+                                   total: summary.total, pagingCapExceeded: summary.pagingCapExceeded,
+                                   incomplete: summary.incomplete}));
     }
   } finally {
     try { await owner.closeTab(sign.tab); } catch {}

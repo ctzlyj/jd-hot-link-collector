@@ -13,6 +13,7 @@ from PIL import Image
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from collector_guard import atomic_json, ordered_variants
 from jpeg_cache import save_cached_jpeg
+from image_variants import save_with_n0_fallback
 
 import os
 ROOT = Path(os.environ['JD_COLLECTOR_ROOT']).resolve() if os.environ.get('JD_COLLECTOR_ROOT') else Path.home() / 'Desktop' / '京东链接搬运'
@@ -40,6 +41,11 @@ def get_public(url):
 
 def save_jpeg(url, destination):
     return save_cached_jpeg(url, destination, CACHE, STAGE, get_public)
+
+def save_main_jpeg(url, destination):
+    """Main images may publish a corrupt size variant; retry the same-host n0
+    standard size once and report the substitution for the staging manifest."""
+    return save_with_n0_fallback(save_jpeg, url, destination)
 
 def detail_urls(spu):
     cache = STAGE / 'details' / f'{spu}.json'

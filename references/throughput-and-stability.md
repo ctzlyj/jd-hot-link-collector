@@ -10,6 +10,10 @@
 - 实测单 SKU 从约 1.5 秒降到 0.3-0.5 秒；签名仍由页面自身 SDK 生成，不出页面内存。
 - 页面内轮询 25ms，单 SKU 超时 20 秒，超时立刻 `abortExpression` 并停轮，不重放。
 
+## 页面状态类停摆的短冷却三振（1.0.8）
+- `MAIN_IMAGES_MISSING` 等页面状态失败实测多为瞬态（直连重试可过），驱动器按三振隔离处理：短冷却（`JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS`，默认 5 秒）快速重试，同一商品连续 3 次仍失败才写 `errors/` 并继续整批；连续 3 次隔离无推进仍会停为 `BLOCKED_ENVIRONMENT`。
+- 仅纳入有瞬态实证的 `MAIN_IMAGES_MISSING`；`TITLE_MISSING`/`DETAIL_ID_MISSING` 等仍保持立即拦停，避免把真数据缺陷当瞬态刷掉。
+
 ## 单轮请求上限 45
 - 单页连续约 50 次请求后浏览器命令开始报 `LOCAL_OR_TRANSPORT_ERROR`（大 SKU 商品反复触发）。
 - 把 `JD_BATCH_MAX_REQUESTS` 设为 45，可在崩溃点前换页重开：实测错误从每 2-3 分钟一次降到整晚 0 次，代价只是每轮多一次页面加载。
