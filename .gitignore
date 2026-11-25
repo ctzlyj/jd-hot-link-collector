@@ -10,3 +10,6 @@ video_cache/
 packages/
 receipts/
 partial_data/
+
+# local handoff notes (contains machine-specific paths)
+HANDOFF.md
