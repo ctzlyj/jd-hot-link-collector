@@ -104,7 +104,7 @@ def plan_product(keyword,item,known_names):
     for name in ['主图','详情图','SKU图','主图视频']:(temp/name).mkdir(exist_ok=True)
     jobs=[];source_notes=[]
     # Main images are saved eagerly: a corrupt size variant falls back to the
-    # same-host n0 standard size and the substitution is recorded in the receipt.
+    # same-host n12 standard size and the substitution is recorded in the receipt.
     main_images=[image_url(c['u']) for c in main['carousel'] if c.get('u')]
     for i,u in enumerate(main_images,1):
         note=save_main_jpeg(u,temp/'主图'/f'主图_{i}.jpg')

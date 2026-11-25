@@ -1,4 +1,4 @@
-"""Main-image n0 variant fallback: URL logic, wiring and durable notes."""
+"""Main-image n12 variant fallback: URL logic, wiring and durable notes."""
 import hashlib, json, os, sys, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,41 +9,41 @@ import image_variants
 
 
 class N0VariantTests(unittest.TestCase):
-    def test_size_segments_switch_to_n0_on_the_same_host(self):
-        self.assertEqual(image_variants.n0_variant('https://img14.360buyimg.com/n1/jfs/t1/a.jpg'),
-                         'https://img14.360buyimg.com/n0/jfs/t1/a.jpg')
-        self.assertEqual(image_variants.n0_variant('https://img10.360buyimg.com/s800x800_/jfs/t1/a.jpg?x=1'),
-                         'https://img10.360buyimg.com/n0/jfs/t1/a.jpg?x=1')
-        self.assertEqual(image_variants.n0_variant('//img14.360buyimg.com/n5/jfs/a.jpg'),
-                         '//img14.360buyimg.com/n0/jfs/a.jpg')
+    def test_size_segments_switch_to_n12_on_the_same_host(self):
+        self.assertEqual(image_variants.clean_variant('https://img14.360buyimg.com/n1/jfs/t1/a.jpg'),
+                         'https://img14.360buyimg.com/n12/jfs/t1/a.jpg')
+        self.assertEqual(image_variants.clean_variant('https://img10.360buyimg.com/s800x800_/jfs/t1/a.jpg?x=1'),
+                         'https://img10.360buyimg.com/n12/jfs/t1/a.jpg?x=1')
+        self.assertEqual(image_variants.clean_variant('//img14.360buyimg.com/n5/jfs/a.jpg'),
+                         '//img14.360buyimg.com/n12/jfs/a.jpg')
 
     def test_foreign_hosts_and_plain_paths_have_no_variant(self):
-        self.assertIsNone(image_variants.n0_variant('https://img10.360buyimg.com.attacker.test/n1/a.jpg'))
-        self.assertIsNone(image_variants.n0_variant('https://example.com/n1/a.jpg'))
-        self.assertIsNone(image_variants.n0_variant('https://img14.360buyimg.com/imgzone/'))
-        self.assertIsNone(image_variants.n0_variant('https://img14.360buyimg.com/jfs/a.jpg'))
+        self.assertIsNone(image_variants.clean_variant('https://img10.360buyimg.com.attacker.test/n1/a.jpg'))
+        self.assertIsNone(image_variants.clean_variant('https://example.com/n1/a.jpg'))
+        self.assertIsNone(image_variants.clean_variant('https://img14.360buyimg.com/imgzone/'))
+        self.assertIsNone(image_variants.clean_variant('https://img14.360buyimg.com/jfs/a.jpg'))
 
     def test_fallback_returns_a_note_only_when_the_variant_is_used(self):
         dst = Path('main_1.jpg')
         def failing(url, destination):
-            if '/n0/' not in url: raise ValueError('JPEG_VALIDATION_FAILED')
-        note = image_variants.save_with_n0_fallback(lambda u, d: None, 'https://img14.360buyimg.com/n1/a.jpg', dst)
+            if '/n12/' not in url: raise ValueError('JPEG_VALIDATION_FAILED')
+        note = image_variants.save_with_clean_fallback(lambda u, d: None, 'https://img14.360buyimg.com/n1/a.jpg', dst)
         self.assertIsNone(note)
-        note = image_variants.save_with_n0_fallback(failing, 'https://img14.360buyimg.com/n1/a.jpg', dst)
+        note = image_variants.save_with_clean_fallback(failing, 'https://img14.360buyimg.com/n1/a.jpg', dst)
         self.assertEqual(note, {'file': 'main_1.jpg',
                                 'originalUrl': 'https://img14.360buyimg.com/n1/a.jpg',
-                                'variantUrl': 'https://img14.360buyimg.com/n0/a.jpg',
+                                'variantUrl': 'https://img14.360buyimg.com/n12/a.jpg',
                                 'reason': 'ValueError'})
 
     def test_fallback_fails_closed_without_a_usable_variant(self):
         def failing(url, destination): raise ValueError('boom')
         with self.assertRaises(ValueError):
-            image_variants.save_with_n0_fallback(failing, 'https://example.com/n1/a.jpg', Path('x.jpg'))
+            image_variants.save_with_clean_fallback(failing, 'https://example.com/n1/a.jpg', Path('x.jpg'))
         calls = []
         def always_failing(url, destination): calls.append(url); raise ValueError('boom')
         with self.assertRaises(ValueError):
-            image_variants.save_with_n0_fallback(always_failing, 'https://img14.360buyimg.com/n1/a.jpg', Path('x.jpg'))
-        self.assertEqual(calls, ['https://img14.360buyimg.com/n1/a.jpg', 'https://img14.360buyimg.com/n0/a.jpg'])
+            image_variants.save_with_clean_fallback(always_failing, 'https://img14.360buyimg.com/n1/a.jpg', Path('x.jpg'))
+        self.assertEqual(calls, ['https://img14.360buyimg.com/n1/a.jpg', 'https://img14.360buyimg.com/n12/a.jpg'])
 
 
 class WiringTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class ManifestNoteTests(unittest.TestCase):
         def fake_main(url, destination):
             Path(destination).write_bytes(payload)
             return {'file': Path(destination).name, 'originalUrl': url,
-                    'variantUrl': 'https://img14.360buyimg.com/n0/jfs/a.jpg', 'reason': 'ValueError'}
+                    'variantUrl': 'https://img14.360buyimg.com/n12/jfs/a.jpg', 'reason': 'ValueError'}
         def fake_save(url, destination): Path(destination).write_bytes(payload)
         with patch.object(stage_pending, 'save_main_jpeg', fake_main), \
              patch.object(stage_pending, 'save_jpeg', fake_save):
@@ -98,7 +98,7 @@ class ManifestNoteTests(unittest.TestCase):
         manifest = json.loads((self.stage / 'pending_materials' / '1001' / 'manifest.json').read_text(encoding='utf-8'))
         self.assertEqual(manifest['expectedImages'], 2)
         self.assertEqual(len(manifest['images']), 2)
-        self.assertEqual(manifest['sourceNotes'][0]['variantUrl'], 'https://img14.360buyimg.com/n0/jfs/a.jpg')
+        self.assertEqual(manifest['sourceNotes'][0]['variantUrl'], 'https://img14.360buyimg.com/n12/jfs/a.jpg')
         self.assertEqual(result['state'], 'MATERIALS_READY_PRICE_PENDING')
 
     def test_package_receipt_records_the_substitution(self):
@@ -109,7 +109,7 @@ class ManifestNoteTests(unittest.TestCase):
         def fake_main(url, destination):
             Path(destination).write_bytes(payload)
             return {'file': Path(destination).name, 'originalUrl': url,
-                    'variantUrl': 'https://img14.360buyimg.com/n0/jfs/a.jpg', 'reason': 'ValueError'}
+                    'variantUrl': 'https://img14.360buyimg.com/n12/jfs/a.jpg', 'reason': 'ValueError'}
         def fake_save(url, destination): Path(destination).write_bytes(payload)
         with patch.object(package_live, 'save_main_jpeg', fake_main), \
              patch.object(package_live, 'save_jpeg', fake_save):
@@ -117,7 +117,7 @@ class ManifestNoteTests(unittest.TestCase):
         self.assertEqual(planned['state'], 'AWAITING_WORKBOOK')
         self.assertEqual(planned['metadata']['expectedImages'], 2)
         self.assertEqual(planned['metadata']['sourceNotes'][0]['variantUrl'],
-                         'https://img14.360buyimg.com/n0/jfs/a.jpg')
+                         'https://img14.360buyimg.com/n12/jfs/a.jpg')
         receipt = json.loads((self.stage / 'packages' / '1001' / 'package_metadata.json').read_text(encoding='utf-8'))
         self.assertEqual(receipt['sourceNotes'][0]['originalUrl'], 'https://img14.360buyimg.com/n1/jfs/a.jpg')
 

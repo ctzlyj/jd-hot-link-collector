@@ -18,7 +18,7 @@ SKU图/<规格名>.jpg ...    # 按前台SKU顺序命名，冲突加SKU后缀
 - 详情图按 `showdesc` 文档顺序提取，混合 `src/data-lazyload/url()` 均按出现顺序、去重。
 - MP4做结构校验（`ftyp/moov/mdat`、时长>0），不做全帧解码。
 - 商品包只在主商品与全部SKU价格证据齐时生成；标题冲突追加SKU后缀；已存在同名用户目录时报错不覆盖。
-- 主图尺寸变体损坏时自动换同图床 `/n0/` 标准变体重试一次；替换记录（originalUrl/variantUrl/原因）写入打包回执与暂存 manifest 的 `sourceNotes`，无变体或变体也失败按坏链处理。
+- 主图尺寸变体损坏时自动换同图床 `/n12/` 标准变体重试一次；替换记录（originalUrl/variantUrl/原因）写入打包回执与暂存 manifest 的 `sourceNotes`，无变体或变体也失败按坏链处理。
 - 每个包生成receipt；`verify_batch.py` 独立从原始输入和缓存重算并逐行比对表格、图片数量、视频数量。
 
 ## 断点语义

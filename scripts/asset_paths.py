@@ -7,7 +7,7 @@ import requests
 from PIL import Image
 from collector_guard import atomic_json, ordered_variants
 from jpeg_cache import save_cached_jpeg
-from image_variants import save_with_n0_fallback
+from image_variants import save_with_clean_fallback
 
 def resolve_root():
     for arg in sys.argv[1:]:
@@ -50,9 +50,9 @@ def save_jpeg(url, destination):
     return save_cached_jpeg(url, destination, CACHE, STAGE, get_public)
 
 def save_main_jpeg(url, destination):
-    """Main images may publish a corrupt size variant; retry the same-host n0
+    """Main images may publish a corrupt size variant; retry the same-host n12
     standard size once and report the substitution for the package receipt."""
-    return save_with_n0_fallback(save_jpeg, url, destination)
+    return save_with_clean_fallback(save_jpeg, url, destination)
 
 # JD image CDNs publish AAAA records whose IPv6 path stalls ~40s before falling back
 # to IPv4; pin this process to IPv4 so media downloads stay fast.

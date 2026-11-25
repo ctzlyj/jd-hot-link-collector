@@ -38,7 +38,7 @@ def stage_one(kw,item):
         if ready_cache_matches(folder,saved,fingerprint):return saved
     for name in ['main','detail','sku','main_video']:(folder/name).mkdir(parents=True,exist_ok=True)
     jobs=[];issues=[];source_notes=[];images=[]
-    # Main images retry the same-host n0 variant when the published size variant is
+    # Main images retry the same-host n12 variant when the published size variant is
     # corrupt; the substitution is recorded in sourceNotes on the manifest.
     for i,car in enumerate([c for c in main.get('carousel',[]) if c.get('u')],1):
         dst=folder/'main'/(str(i)+'.jpg')
