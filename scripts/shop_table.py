@@ -1,6 +1,10 @@
 """Read shop ids from an operations workbook and write SKU counts back. No network."""
 from __future__ import annotations
+import argparse
+import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from openpyxl import load_workbook
 from prepare_batch import HEADER_LABELS
@@ -125,14 +129,61 @@ def write_back(source, output, results, collected_at=''):
         ws.cell(ri, start_col + 2, len(rec.get('missing') or []))
         ws.cell(ri, start_col + 3, collected_at)
         written += 1
-    wb.save(output)
-    check = load_workbook(output, read_only=True, data_only=False)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=output.parent, suffix='.xlsx')
+    os.close(fd)
+    staged = Path(temporary)
     try:
-        check_rows = list(check.active.values)
-        observed = [str(v).strip() for v in check_rows[header_row - 1][idx:start_col + len(RESULT_HEADERS)]]
+        wb.save(staged)
+        wb.close()
+        check = load_workbook(staged, read_only=True, data_only=False)
+        try:
+            check_rows = list(check.active.values)
+        finally:
+            check.close()
+        observed = check_rows[header_row - 1][start_col - 1:start_col - 1 + len(RESULT_HEADERS)]
+        if tuple(observed) != RESULT_HEADERS or len(check_rows) != len(rows):
+            raise ValueError('WRITE_BACK_READBACK_MISMATCH')
+        os.replace(staged, output)
     finally:
-        check.close()
-    if observed[1:] != [str(l) for l in RESULT_HEADERS] or len(check_rows) != len(rows):
-        raise ValueError('WRITE_BACK_READBACK_MISMATCH')
+        staged.unlink(missing_ok=True)
     return {'output': str(output), 'shopsMatched': matched, 'shopsWritten': written,
             'columns': list(RESULT_HEADERS)}
+
+def main():
+    parser = argparse.ArgumentParser(description="Return verified shop identifiers or append supplied counts to a workbook copy.")
+    parser.add_argument('--input', required=True, type=Path)
+    parser.add_argument('--root', type=Path, help="output directory")
+    parser.add_argument('--results', type=Path, help="authorized shop counter JSON with a shops mapping")
+    parser.add_argument('--result-xlsx', type=Path)
+    parser.add_argument('--collected-at', default='', help="original collection time when recorded")
+    args = parser.parse_args()
+    table = extract_shops_from_workbook(args.input)
+    if args.results is None:
+        if args.result_xlsx:
+            parser.error('--result-xlsx requires --results')
+        print(json.dumps(table, ensure_ascii=False))
+        return
+    data = json.loads(args.results.read_text(encoding='utf-8-sig'))
+    records = data['shops']
+    if not isinstance(records, dict):
+        raise ValueError('SHOP_RESULTS_INVALID')
+    selected = {s['shopId'] for s in table['shops']}
+    known = {}
+    for sid in selected & records.keys():
+        rec = records[sid]
+        if not isinstance(rec, dict) or str(rec.get('shopId', sid)) != sid:
+            raise ValueError('SHOP_RESULT_ID_MISMATCH')
+        if rec.get('done') is False or any(type(rec.get(k)) is not int or rec[k] < 0 for k in ('skuCount', 'productCount')):
+            continue
+        if not isinstance(rec.get('missing'), list):
+            continue
+        known[sid] = rec
+    output = args.result_xlsx or (args.root or args.input.parent) / (args.input.stem + '_SKU结果.xlsx')
+    result = write_back(args.input, output, known, args.collected_at)
+    pending = [sid for sid in sorted(selected) if sid not in known or known[sid]['missing']]
+    print(json.dumps({**result, 'pendingShopIds': pending, 'audit': table['audit']}, ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    main()

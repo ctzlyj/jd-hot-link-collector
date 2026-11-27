@@ -44,7 +44,7 @@ def main():
     work=initial_phase(previous)
     pacing=resolve_pacing(stage)
     ROUND_COOLDOWN=int(pacing['JD_BATCH_ROUND_COOLDOWN_SECONDS']);INTERVAL_MS=pacing['JD_BATCH_INTERVAL_MS'];MAX_REQUESTS=pacing['JD_BATCH_MAX_REQUESTS']
-    STAGE_EVERY=max(1,int(pacing['JD_BATCH_STAGE_EVERY']));FALLBACK=pacing['JD_BATCH_ORIGINAL_PRICE_FALLBACK']=='1'
+    STAGE_EVERY=max(1,int(pacing['JD_BATCH_STAGE_EVERY']));FALLBACK=pacing['JD_BATCH_ORIGINAL_PRICE_FALLBACK']=='1' and (stage/'price_fallback.json').is_file()
     PAGE_STATE_COOLDOWN=pacing['JD_BATCH_PAGE_STATE_COOLDOWN_SECONDS']
     state={'coverageVersion':2,'phase':work,'workPhase':work,'rounds':previous.get('rounds',0),'startedAt':stamp(),'childPid':None,'stall':previous.get('stall'),'stallCount':previous.get('stallCount',0),'consecutiveIsolations':previous.get('consecutiveIsolations',0)}
     def save(**fields):

@@ -1,5 +1,5 @@
 ---
-version: "1.0.10"
+version: "1.0.11"
 name: jd-hot-link-collector
 description: 将京东商品链接清单采集为关键词/商品标题命名的素材包，接口优先按每个源商品的原生上下文读取逐SKU真实到手价和前台SKU顺序，提供点击备用、主图/详情图/SKU图/主图视频、22列商品信息表、断点恢复及独立验收。用户要求采集或搬运素材但不上架时使用；不发布、不修图、不绕过平台登录或风控。
 ---
@@ -112,3 +112,9 @@ python -X utf8 scripts/self_check.py
 `python -X utf8 -m unittest discover -s tests -p test_*.py -v`
 
 测试包含实际 CLI 离线跑两商品、页面头/同源上下文、SKU对象契约、捕获时序、JPEG编码、工作簿回读和共享锁。常用脚本不得用 import 作为语法测试，使用 `node --check` / Python编译；顶层CLI import可能真正启动采集。
+
+### 离线交付与运营表回填
+
+准备、逐 SKU 断点、独立验证和部分交付可用既有任务目录连续执行。`deliver_batch.py` 的回执包含目标总数、已核验数、本次交付商品、增量排除条目、仍缺的商品及其状态。可售规格缺价继续待补，平台明确下架的规格保留下架证据。只有本批已有明确原价备用授权才可使用 `package_live.py --allow-original-price-fallback`，批驱动不能沿用其他批次的同意。
+
+已持有经授权的店级统计 JSON 时，用 `python scripts/shop_table.py --root <输出目录> --input <运营表.xlsx> --results <统计.json>` 按店铺 ID 写回副本并回读；未解析的名称、无有效统计或仍待补的店铺分别保留证据。仅需清点待核店铺时省略 `--results`。这两个入口都可离线运行。

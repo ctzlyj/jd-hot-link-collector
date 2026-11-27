@@ -6,19 +6,12 @@ from datetime import datetime,timezone
 from collector_guard import atomic_json,validate_main,ordered_variants
 from asset_paths import ROOT,STAGE,CACHE,safe_name,image_url,save_jpeg,save_main_jpeg,get_public
 from workbook_writer import write_workbook
+from checkpoint_status import active_variants
 from package_contract import ordered_detail_urls,decode_detail_payload,HEADERS,table_matrix,error_state
 from media_guard import inspect_mp4
 SCRIPT=Path(__file__).parent
 
 def load(path):return json.loads(path.read_text(encoding='utf-8-sig'))
-
-def active_variants(stage,rows):
-    """Variants the platform reports as unavailable (delisted) carry no price or
-    image and stay out of the package instead of blocking it forever."""
-    def unavailable(sku):
-        try:return load(Path(stage)/'errors'/f'{sku}.json').get('reason')=='PRODUCT_UNAVAILABLE'
-        except (OSError,ValueError):return False
-    return [r for r in rows if not unavailable(r['sku'])]
 
 def fallback_marker(stage=STAGE):
     """Batch-scoped user authorization for original-price fallback, or None."""
