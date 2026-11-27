@@ -20,9 +20,10 @@ STAGES = {"prepare": "prepare_batch.py", "package": "package_live.py", "verify":
 
 def invoke(command, env, expect=0):
     proc = subprocess.run(command, env=env, capture_output=True, encoding="utf8", errors="replace", timeout=120)
-    if proc.returncode != expect:
+    accepted = (expect,) if isinstance(expect, int) else expect
+    if proc.returncode not in accepted:
         raise AssertionError((command, proc.returncode, proc.stdout[-900:], proc.stderr[-600:]))
-    return proc.stdout
+    return proc.stdout + proc.stderr if proc.returncode else proc.stdout
 
 
 def save(path, data):
@@ -91,7 +92,8 @@ def run(root, prefix=None):
         assert validation()["results"][0]["state"] == "PRICE_PENDING"
         # A pre-existing pacing/environment flag cannot authorize another batch's original price.
         env["JD_BATCH_ORIGINAL_PRICE_FALLBACK"] = "1"
-        call("fallback-verify", [], expect=1)
+        refusal = call("fallback-verify", [], expect=(1, 2))
+        assert "ORIGINAL_PRICE_FALLBACK_AUTHORIZATION_REQUIRED" in refusal
         assert not (stage / "price_fallback.json").exists()
         save(stage / "errors" / (sibling + ".json"), {"sku": sibling, "reason": "PRODUCT_UNAVAILABLE"})
         call("package", [])
