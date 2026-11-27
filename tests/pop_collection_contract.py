@@ -130,6 +130,62 @@ def run(root, prefix=None):
         call("fallback-verify", [])
         assert json.loads((stage / "price_fallback.json").read_bytes())["marker"].startswith("original_price_user_authorized_")
 
+        # Exercise the unmodified packaging command at its public-image transport boundary.
+        # Only source bytes are substituted. The final independent verifier still runs through the dispatcher.
+        import importlib
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        import requests
+        out = workspace / "variant-output"
+        out.mkdir()
+        stage = (state / "mature/collection/batches" / sha256(str(out.resolve()).encode()).hexdigest()
+                 if merchant else out / ".collector_state")
+        env.update(JD_COLLECTOR_ROOT=str(out), JD_COLLECTOR_STATE_DIR=str(stage), JD_BATCH_STATE_DIR=str(stage))
+        call("prepare", ["--input", source])
+        original_url = "https://img14.360buyimg.com/n1/jfs/fixture-source.jpg"
+        alt = original_url.replace("/n1/", "/n12/")
+        observed = {**data, "carousel": [{"u": original_url, "v": []}], "colorSize": []}
+        save(stage / "data" / (pid + ".json"), {"source": "live_native_page", "data": observed})
+        save(stage / "details_ordered" / (spu + ".json"), [])
+        scripts = root / ("mature/collection/scripts" if merchant else "scripts")
+        with patch.dict(os.environ, {**env, "HEIDENG_COLLECTION_ROOT": str(out), "HEIDENG_COLLECTION_STATE_DIR": str(stage)}), \
+                patch.object(sys, "argv", ["package_live.py", "--root", str(out)]), \
+                patch.object(sys, "path", [str(scripts), str(root), *sys.path]):
+            package = importlib.import_module("package_live")
+            assets = importlib.import_module("asset_paths")
+            for code in (403, 429):
+                response = requests.Response()
+                response.status_code = code
+                with patch.object(assets, "get_public", side_effect=requests.HTTPError(response=response)) as fetch, \
+                        redirect_stdout(StringIO()):
+                    package.main()
+                assert [c.args[0] for c in fetch.call_args_list] == [original_url]
+                record = json.loads((stage / "package_report.json").read_bytes())[0]
+                assert record["state"] == "MATERIAL_ERROR" and record["httpStatus"] == code
+            with patch.object(assets, "get_public", return_value=b"<html>Login required</html>") as fetch, \
+                    redirect_stdout(StringIO()):
+                package.main()
+            assert [c.args[0] for c in fetch.call_args_list] == [original_url]
+            assert json.loads((stage / "package_report.json").read_bytes())[0]["state"] == "MATERIAL_ERROR"
+            def image_response(url):
+                if url == original_url:
+                    return b"\xff\xd8truncated-jpeg"
+                assert url == alt, url
+                return buf.getvalue()
+            with patch.object(assets, "get_public", side_effect=image_response) as fetch, redirect_stdout(StringIO()):
+                package.main()
+            assert [c.args[0] for c in fetch.call_args_list] == [original_url, alt]
+        call("verify", [])
+        assert validation()["results"][0]["state"] == "VERIFIED", validation()
+        metadata_file = stage / "packages" / pid / "package_metadata.json"
+        metadata = json.loads(metadata_file.read_bytes())
+        note, = metadata["sourceNotes"]
+        assert note["originalUrl"] == original_url and note["variantUrl"] == alt and note["alsoUsedFor"]
+        note["variantUrl"] = alt.replace("fixture-source.jpg", "wrong-product.jpg")
+        save(metadata_file, metadata)
+        call("verify", [])
+        assert validation()["results"][0]["state"] == "VALIDATION_ERROR"
         shops = workspace / "shops.xlsx"
         wb = Workbook()
         wb.active.append(["店铺", "商品标签"])
@@ -149,7 +205,8 @@ def run(root, prefix=None):
         finally:
             book.close()
         assert source_sha == sha256(shops.read_bytes()).hexdigest()
-        print(json.dumps({"scope": 2, "verified": 1, "pending": 1, "shopCountsWritten": 1, "platformWrites": 0}))
+        print(json.dumps({"scope": 2, "verified": 1, "pending": 1, "shopCountsWritten": 1, "variantReadback": "verified",
+                          "restrictionsRetried": 0, "tamperedVariantRejected": True, "platformWrites": 0}))
 
 
 if __name__ == "__main__":

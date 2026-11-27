@@ -40,7 +40,7 @@ class N0VariantTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             image_variants.save_with_clean_fallback(failing, 'https://example.com/n1/a.jpg', Path('x.jpg'))
         calls = []
-        def always_failing(url, destination): calls.append(url); raise ValueError('boom')
+        def always_failing(url, destination): calls.append(url); raise ValueError('JPEG_VALIDATION_FAILED')
         with self.assertRaises(ValueError):
             image_variants.save_with_clean_fallback(always_failing, 'https://img14.360buyimg.com/n1/a.jpg', Path('x.jpg'))
         self.assertEqual(calls, ['https://img14.360buyimg.com/n1/a.jpg', 'https://img14.360buyimg.com/n12/a.jpg'])
