@@ -9,18 +9,12 @@ from collector_guard import atomic_json, ordered_variants
 from jpeg_cache import save_cached_jpeg
 from image_variants import save_with_clean_fallback
 
-def resolve_root():
-    for arg in sys.argv[1:]:
-        if arg.startswith('--root='): return Path(arg.split('=',1)[1]).expanduser().resolve()
-    if '--root' in sys.argv:
-        at=sys.argv.index('--root')
-        if len(sys.argv)>at+1:return Path(sys.argv[at+1]).expanduser().resolve()
-    env=os.environ.get('JD_COLLECTOR_ROOT')
-    if env: return Path(env).expanduser().resolve()
-    raise SystemExit('ROOT_REQUIRED: pass --root=<output-dir> or JD_COLLECTOR_ROOT')
+from collection_paths import resolve_root, resolve_stage
+
 ROOT = resolve_root()
-STAGE = Path(os.environ['JD_COLLECTOR_STATE_DIR']).resolve() if os.environ.get('JD_COLLECTOR_STATE_DIR') else ROOT / '.collector_state'
+STAGE = resolve_stage(ROOT)
 CACHE = STAGE / 'asset_cache'
+
 
 def safe_name(text):
     text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(text)).strip(' .') or '未命名'
@@ -61,3 +55,6 @@ _orig_getaddrinfo = _socket.getaddrinfo
 def _ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
 _socket.getaddrinfo = _ipv4_getaddrinfo
+
+def prior_receipts_path():
+    return os.environ.get("JD_COLLECTOR_PRIOR_RECEIPTS")

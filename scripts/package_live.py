@@ -1,24 +1,30 @@
 """Create completed collection packages from live per-SKU checkpoints only."""
 from __future__ import annotations
+# Help is offline and has no runtime/browser side effects.
+import sys as _sys
+if __name__ == '__main__' and ('--help' in _sys.argv or '-h' in _sys.argv):
+    import argparse as _argparse
+    _help = _argparse.ArgumentParser(description='Package all complete per-SKU checkpoints; missing arrival prices remain pending.')
+    _help.add_argument('--root', required=True)
+    _help.add_argument('--state-dir')
+    _help.add_argument('--allow-original-price-fallback', action='store_true')
+    _help.print_help()
+    raise SystemExit(0)
+
 import json,sys,hashlib,subprocess,concurrent.futures,shutil
 from pathlib import Path
 from datetime import datetime,timezone
 from collector_guard import atomic_json,validate_main,ordered_variants
 from asset_paths import ROOT,STAGE,CACHE,safe_name,image_url,save_jpeg,save_main_jpeg,get_public
 from workbook_writer import write_workbook
+from checkpoint_status import active_variants
+from image_variants import reuse_variant
+from asset_paths import prior_receipts_path
 from package_contract import ordered_detail_urls,decode_detail_payload,HEADERS,table_matrix,error_state
 from media_guard import inspect_mp4
 SCRIPT=Path(__file__).parent
 
 def load(path):return json.loads(path.read_text(encoding='utf-8-sig'))
-
-def active_variants(stage,rows):
-    """Variants the platform reports as unavailable (delisted) carry no price or
-    image and stay out of the package instead of blocking it forever."""
-    def unavailable(sku):
-        try:return load(Path(stage)/'errors'/f'{sku}.json').get('reason')=='PRODUCT_UNAVAILABLE'
-        except (OSError,ValueError):return False
-    return [r for r in rows if not unavailable(r['sku'])]
 
 def fallback_marker(stage=STAGE):
     """Batch-scoped user authorization for original-price fallback, or None."""
@@ -117,7 +123,9 @@ def plan_product(keyword,item,known_names):
         if not image:raise ValueError('SKU_IMAGE_MISSING')
         n=safe_name(' '.join(x for x in [row['spec1'],row['spec2']] if x) or row['sku'])
         if n in names:n+='_'+row['sku']
-        names.add(n);jobs.append((image_url(image),temp/'SKU图'/(n+'.jpg')))
+        names.add(n)
+        destination = temp/'SKU图'/(n+'.jpg')
+        jobs.append((reuse_variant(image_url(image), destination, temp, source_notes), destination))
     groups={}
     for u,p in jobs:groups.setdefault(u,[]).append(p)
     def download(u,paths):
@@ -144,7 +152,7 @@ def plan_product(keyword,item,known_names):
 def prior_folder_owner(final,pid):
     """True only when a provided prior receipt proves the folder packages this same pid."""
     import os
-    path=os.environ.get('JD_COLLECTOR_PRIOR_RECEIPTS')
+    path=prior_receipts_path()
     if not path:return False
     try:entries=json.loads(Path(path).read_text(encoding='utf-8-sig'))
     except (OSError,ValueError):return False

@@ -1,4 +1,15 @@
 """Independent batch validation against original inputs, live checkpoints and filesystem."""
+
+# Help is offline and has no runtime/browser side effects.
+import sys as _sys
+if __name__ == '__main__' and ('--help' in _sys.argv or '-h' in _sys.argv):
+    import argparse as _argparse
+    _help = _argparse.ArgumentParser(description='Independently validate workbook and media against source checkpoints and URL caches.')
+    _help.add_argument('--root', required=True)
+    _help.add_argument('--state-dir')
+    _help.print_help()
+    raise SystemExit(0)
+
 import json,hashlib,collections
 from pathlib import Path
 from openpyxl import load_workbook
@@ -8,6 +19,7 @@ from package_live import ROOT,STAGE,live_data,verify_table,active_variants
 from package_contract import table_matrix,error_state
 from media_guard import inspect_mp4
 from checkpoint_status import pending_checkpoint_status
+from image_variants import readback_entries
 from asset_paths import safe_name,image_url
 from media_evidence import verify_media_evidence,expected_media_entries
 
@@ -32,6 +44,7 @@ def run():
     # be absent from both the expected media set and the delivered folder.
     dead_detail=set(metadata.get('deadDetailUrls') or [])
     entries=[e for e in entries if e['url'] not in dead_detail]
+    entries=readback_entries(entries,metadata.get("sourceNotes", []))
     verified_media=verify_media_evidence(folder,STAGE,entries)
     expected=table_matrix(main,rows,prices);verify_table(folder/'商品信息.xlsx',metadata)
     wb=load_workbook(folder/'商品信息.xlsx',read_only=True,data_only=False);actual=list(wb.active.values)[1:];wb.close()

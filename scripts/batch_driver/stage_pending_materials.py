@@ -1,4 +1,8 @@
 """Stage already observed public media. No JD business requests, prices or workbooks."""
+import sys as _help_sys
+if '--help' in _help_sys.argv:
+    print('stage_pending_materials.py --root <output> [original parameters]; dispatcher supplies isolated state')
+    raise SystemExit(0)
 import concurrent.futures,hashlib,json,shutil,sys
 from datetime import datetime,timezone
 from pathlib import Path
@@ -7,6 +11,8 @@ from collector_guard import atomic_json,ordered_variants
 from stage_cached_assets import ROOT,STAGE,CACHE,image_url,safe_name,save_jpeg,save_main_jpeg,get_public
 from package_contract import ordered_detail_urls
 from media_guard import inspect_mp4
+from image_variants import reuse_variant
+from checkpoint_status import active_variants
 from staging_cache import media_fingerprint,ready_cache_matches
 
 def read(p):return json.loads(p.read_text(encoding='utf-8-sig'))
@@ -25,7 +31,7 @@ def stage_one(kw,item):
             if d.get('login') is True and d.get('responseSku')==pid and saved.get('source') in ['live_signed_page','live_native_page','live_signed_page_arrival_pending','live_native_page_arrival_pending']:
                 main=d;break
     if not main:return {'sku':pid,'state':'MAIN_PENDING'}
-    rows=ordered_variants(pid,main.get('colorSize') or [])
+    rows=active_variants(STAGE,ordered_variants(pid,main.get('colorSize') or []))
     folder=STAGE/'pending_materials'/pid
     data_list=[main]
     for row in rows:
@@ -62,7 +68,9 @@ def stage_one(kw,item):
         if not image:
             p=STAGE/'data'/(row['sku']+'.json');data=read(p)['data'] if p.exists() else main
             image=next((c['u'] for c in data.get('carousel',[]) if c.get('u')),'')
-        if image:jobs.append((image_url(image),folder/'sku'/(str(i).zfill(3)+'.jpg')))
+        if image:
+            destination=folder/'sku'/(str(i).zfill(3)+'.jpg')
+            jobs.append((reuse_variant(image_url(image), destination, folder, source_notes), destination))
         else:issues.append({'step':'sku-image','sku':row['sku'],'error':'IMAGE_MISSING'})
     for url,dst in jobs:
         try:

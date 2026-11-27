@@ -112,6 +112,28 @@ def output_paths(root, name, count, date, incremental, part=None):
     archive = root / f'{name}{kind}完整商品包-{count}个-{date}{suffix}.zip'
     return manifest, archive
 
+def batch_coverage(report, stage):
+    rows = report['results']
+    observed = {(r['keyword'], str(r['sourceSku'])): r for r in rows}
+    if len(observed) != len(rows):
+        raise ValueError('DUPLICATE_VALIDATION_TARGET')
+    manifest = stage / 'keyword_tasks.json'
+    targets = list(observed)
+    if manifest.exists():
+        targets = [(kw, str(row['pid'])) for kw, items in load_json(manifest).items() for row in items]
+        if len(targets) != len(set(targets)) or set(observed) - set(targets):
+            raise ValueError('VALIDATION_SCOPE_MISMATCH')
+    pending = []
+    for kw, pid in targets:
+        row = observed.get((kw, pid), {})
+        if row.get('state') != 'VERIFIED':
+            pending.append({'keyword': kw, 'sourceSku': pid, 'state': row.get('state') or 'NOT_VERIFIED',
+                            **{key: row[key] for key in ('missingPriceSkus', 'error') if row.get(key)}})
+    scope = max(len(targets), int(report.get('scope', 0)))
+    return {'scope': scope, 'verifiedProducts': len(targets) - len(pending), 'pending': pending,
+            'unidentifiedTargets': scope - len(targets), 'complete': bool(targets) and not pending and scope == len(targets)}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--root', required=True)
@@ -123,13 +145,24 @@ def main():
     ap.add_argument('--overwrite', action='store_true')
     args = ap.parse_args()
     root = Path(args.root).expanduser().resolve()
-    stage = Path(args.state_dir).expanduser().resolve() if args.state_dir else root / '.collector_state'
+    from asset_paths import resolve_stage
+    stage = resolve_stage(root, args.state_dir)
     report_path = stage / 'independent_validation.json'
     if not report_path.exists(): raise SystemExit('VALIDATION_REPORT_NOT_FOUND:' + str(report_path))
-    items = verified_items(load_json(report_path), stage, root)
+    report = load_json(report_path)
+    coverage = batch_coverage(report, stage)
+    items = verified_items(report, stage, root)
+    verified = [x['pid'] for x in items]
     incremental = bool(args.previous_zip)
     if incremental: items = incremental_items(items, args.previous_zip)
-    if not items: raise SystemExit('NO_VERIFIED_ITEMS')
+    selected = {x['pid'] for x in items}
+    coverage['excludedByPreviousArchive'] = [pid for pid in verified if pid not in selected]
+    if not items:
+        print(json.dumps({**coverage, 'products': 0, 'deliveredProductIds': [], 'archives': [],
+                          'incremental': incremental, 'keywords': 0}, ensure_ascii=False))
+        if not verified:
+            raise SystemExit(1)
+        return
     manifest, archive = output_paths(root, args.name, len(items), args.date, incremental)
     bins = keyword_bins(items, args.max_size_mb)
     archives = [archive] if len(bins) == 1 else [
@@ -140,7 +173,7 @@ def main():
     write_manifest(items, manifest, incremental)
     entry = INCREMENTAL_MANIFEST_NAME if incremental else MANIFEST_NAME
     outputs = [write_zip(b['items'], a, manifest, entry) for b, a in zip(bins, archives)]
-    print(json.dumps({'products': len(items), 'keywords': len({x['keyword'] for x in items}),
+    print(json.dumps({**coverage, 'products': len(items), 'deliveredProductIds': [item['pid'] for item in items], 'keywords': len({x['keyword'] for x in items}),
                       'incremental': incremental, 'archives': outputs}, ensure_ascii=False))
 
 if __name__ == '__main__': main()

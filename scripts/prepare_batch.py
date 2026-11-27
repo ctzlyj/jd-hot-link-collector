@@ -224,7 +224,8 @@ def main():
     finally: wb.close()
     tasks, shifted, layout, duplicates, total_rows = parse_batch(rows, source.stem)
     link_derived = sum(1 for items in tasks.values() for x in items if x.get('linkDerived'))
-    stage = Path(a.state_dir).expanduser().resolve() if a.state_dir else root / '.collector_state'
+    from collection_paths import resolve_stage
+    stage = resolve_stage(root, a.state_dir)
     stage.mkdir(parents=True, exist_ok=True)
     atomic(stage / 'keyword_tasks.json', tasks)
     scope = sum(len(v) for v in tasks.values())

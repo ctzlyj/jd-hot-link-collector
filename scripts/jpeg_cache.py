@@ -45,16 +45,24 @@ def save_cached_jpeg(url, destination, cache_root, stage, fetch):
     with _LOCKS[int(key[:8], 16) % len(_LOCKS)]:
         data = cache.read_bytes() if cache.is_file() else b''
         if not _valid_jpeg(data):
-            with Image.open(io.BytesIO(fetch(url))) as image:
-                image.load()
-                if image.mode == 'RGBA':
-                    rgb = Image.new('RGB', image.size, 'white')
-                    rgb.paste(image, mask=image.getchannel('A'))
-                else:
-                    rgb = image.convert('RGB')
-                encoded = io.BytesIO()
-                rgb.save(encoded, 'JPEG', quality=92)
-                data = encoded.getvalue()
+            raw = fetch(url)
+            try:
+                with Image.open(io.BytesIO(raw)) as image:
+                    image.load()
+                    if image.mode == 'RGBA':
+                        rgb = Image.new('RGB', image.size, 'white')
+                        rgb.paste(image, mask=image.getchannel('A'))
+                    else:
+                        rgb = image.convert('RGB')
+                    encoded = io.BytesIO()
+                    rgb.save(encoded, 'JPEG', quality=92)
+                    data = encoded.getvalue()
+            except (OSError, ValueError) as exc:
+                image_header = (raw.startswith((b"\xff\xd8", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a"))
+                                or raw[:4] == b"RIFF" and raw[8:12] == b"WEBP")
+                if image_header:
+                    raise ValueError("JPEG_VALIDATION_FAILED") from exc
+                raise
             if not _valid_jpeg(data):
                 raise ValueError('JPEG_VALIDATION_FAILED')
             _publish(cache, data)

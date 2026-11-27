@@ -28,6 +28,18 @@ def _snapshot(stage, sku, price_required=False):
     return None
 
 
+def active_variants(stage, rows):
+    """Exclude only a variant explicitly recorded as unavailable by the source platform."""
+    active = []
+    for row in rows:
+        sku = str(row['sku'])
+        error = _read(stage / 'errors' / (sku + '.json'))
+        if error.get('reason') == 'PRODUCT_UNAVAILABLE' and str(error.get('sku', sku)) == sku:
+            continue
+        active.append(row)
+    return active
+
+
 def pending_checkpoint_status(stage, sku):
     """A known matrix lacking any price is distinct from an unseen product."""
     sku = str(sku)
@@ -43,9 +55,7 @@ def pending_checkpoint_status(stage, sku):
         return {'state': 'CHECKPOINT_INVALID', 'skuMatrixKnown': False}
     # A variant the platform itself reports as unavailable (delisted) cannot have a
     # price and must not keep its product pending forever.
-    missing = [r['sku'] for r in rows
-               if _snapshot(stage, r['sku'], True) is None
-               and _read(stage / 'errors' / (str(r['sku']) + '.json')).get('reason') != 'PRODUCT_UNAVAILABLE']
+    missing = [r['sku'] for r in active_variants(stage, rows) if _snapshot(stage, r['sku'], True) is None]
     return {'state': 'PRICE_PENDING' if missing else 'PACKAGING_PENDING',
             'skuMatrixKnown': True, 'knownSkuCount': len(rows),
             'missingPriceSkus': missing}
